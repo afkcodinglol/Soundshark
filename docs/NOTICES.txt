@@ -1,0 +1,22 @@
+Soundshark 1.4.2
+
+Soundshark uses separately executed, unmodified FFmpeg/ffprobe, yt-dlp and Deno tools, and NAudio and Microsoft .NET libraries. These components remain under their respective licenses. See Tools/licenses, Tools/manifest.json and DEPENDENCIES.md for version and checksum details. Dependency source archives accompany the workspace deliverables in outputs/dependency-sources.
+
+FFmpeg / ffprobe 8.1.2 full build by Gyan Doshi: GNU GPL version 3 or later. FFmpeg configuration and external-library version listing are preserved in Tools/licenses/FFmpeg-build.txt. Upstream: https://ffmpeg.org/ and https://www.gyan.dev/ffmpeg/builds/.
+yt-dlp 2026.08.19: Unlicense for project source; the Windows executable also incorporates components under additional licenses. Upstream: https://github.com/yt-dlp/yt-dlp.
+Deno v2.9.7: MIT; contains additional licensed components. Upstream: https://github.com/denoland/deno.
+NAudio 2.2.1: MIT. https://github.com/naudio/NAudio.
+Microsoft .NET 10: MIT and component notices. https://github.com/dotnet/runtime.
+Inno Setup: installer engine license. https://jrsoftware.org/isinfo.php.
+
+Copyright (c) 2026 Soundshark contributors. Application source is provided with this delivery. No warranty is provided. Third-party licenses take precedence for their components.
+
+
+
+
+
+
+
+Bundled fonts: Lato by the Lato project authors, and Carlito by the Carlito project authors. Distributed under SIL Open Font License 1.1. Original licenses are included in Fonts/Lato-OFL.txt and Fonts/Carlito-OFL.txt. Sources: https://github.com/google/fonts/tree/main/ofl/lato and https://github.com/google/fonts/tree/main/ofl/carlito
+
+Additional bundled fonts: Abel, Anonymous Pro, Cardo, Cousine, Didact Gothic, Fira Sans, IBM Plex Mono, Inria Serif, Poppins and Questrial. Their original author/copyright notices and SIL OFL 1.1 licenses are included in Fonts/*-OFL.txt. Font files are sourced from the respective ofl family directories in https://github.com/google/fonts and are embedded for offline use. Installed Windows fonts are referenced from the user's system and are not redistributed.

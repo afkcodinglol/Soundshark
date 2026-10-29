@@ -14,13 +14,13 @@ Describe the task you want to accomplish and how the change would help. A short 
 
 ## Work on the code
 
-Application source is currently published in the `Soundshark-source.zip` asset on the [Releases page](https://github.com/afkcodinglol/Soundshark/releases/latest). The repository itself hosts project documentation and downloads.
+Application source is available in this repository. Each [release](https://github.com/afkcodinglol/Soundshark/releases/latest) also includes a matching `Soundshark-source.zip` archive.
 
-1. Extract the source archive and install the .NET SDK specified in `global.json` on Windows x64.
+1. Clone the repository or extract the source archive, and install the .NET SDK specified in `global.json` on Windows x64.
 2. Make a focused change and preserve original audio files and user settings.
 3. Build and run the relevant checks described in the [README](README.md#build-it-yourself).
-4. Open an issue describing the change, attach a patch or link to your work, and state what you tested. Distinguish automated checks from real-device or voice-app testing.
+4. Open a pull request describing the change and state what you tested. Distinguish automated checks from real-device or voice-app testing.
 
-Documentation changes in this repository can be submitted as pull requests. For a larger code change, start an issue so its approach and source version are clear before preparing a patch.
+For a larger code change, start an issue so its approach and scope are clear before implementation.
 
 Soundshark's own code is covered by the [MIT license](LICENSE). Keep third-party notices and licenses intact. Optional native microphone support has additional setup and validation requirements; read the [microphone guide](docs/MICROPHONE.md) before changing it.

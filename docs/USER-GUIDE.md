@@ -14,7 +14,7 @@ Enable **Clipper** under PC Audio to keep the last 1–60 seconds ready to captu
 
 Drag over the waveform to select audio. **Trim Selected** removes the selection and joins the remainder; **Keep Selected** removes everything outside it. Undo and redo let you revise edits, including **Delete All**. Original imports remain unchanged.
 
-Use **Precise Selection** for numeric start/end times. Long tracks use a fifteen-second view: scroll the mouse wheel to move through the track. The view follows playback.
+Use the numeric start/end fields for precise selection. Tracks start fitted to their full length; use **Zoom** and **Scroll** to work on a smaller section. **Volume** controls Studio preview and saved output.
 
 **Space** previews, **Ctrl+Z / Ctrl+Y** undo and redo, **Ctrl+S** saves, and double-click selects everything. Use **Save To Library** to keep wanted audio before closing; new launches start with an empty Studio track.
 
@@ -22,7 +22,7 @@ Use **Precise Selection** for numeric start/end times. Long tracks use a fifteen
 
 Search your saved audio, preview locally, or use the optional **Play Through Mic** route. Each sound has its own Stop control; **Stop All** stops all playback. Use the three-dot menu for more actions, including button colors. Enable **Group By Color** to keep matching colors together.
 
-Each row's **Shortcut** button assigns keyboard or mouse shortcuts with Mic, Preview, or Both routing. Middle and side buttons can be captured directly; right-click a shortcut box for all mouse-button choices. Global shortcut options and automatic input settings are in **Soundboard Settings**.
+Choose **Shortcut** from a sound's three-dot menu to assign keyboard or mouse shortcuts with Mic, Preview, or Both routing, and optional push-to-talk keys held during playback. Input boxes capture mouse buttons directly; see the detailed shortcut instructions below.
 
 Physical microphone playback is experimental and requires separate system setup. Read the [microphone guide](MICROPHONE.md) before enabling it.
 
@@ -38,7 +38,7 @@ Turn the toggle off for full-length recording and other conversion formats. Its 
 
 ## Customize and update
 
-**UI Settings** previews dark/light mode, accents, fonts, text size, and Library layout. Save keeps changes across launches; Cancel restores the previous appearance. Performance Mode reduces motion.
+Use the sun/moon switch in the main window for light/dark mode. **UI Settings** previews accents, fonts, text size, and Performance Mode; **Custom Font** imports TTF, OTF, TTC, or OTC files. Save keeps changes across launches; Cancel restores the previous appearance. Library layout controls are in Library. Performance Mode reduces motion and disables drag arranging.
 
 Use **Update Soundshark** for app updates and **Update Import Tools** when website changes affect imports. Verified local backups support app/tool rollback. See [updates and rollback](UPDATES.md) for details.
 

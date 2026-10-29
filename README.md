@@ -2,8 +2,6 @@
 
 ![Soundshark — Record. Clip. Play. Make it yours.](docs/images/soundshark-banner.png)
 
-**Your audio. Your soundboard. Your source code.**
-
 A native Windows audio studio for recording, editing, converting, and playing your favorite sounds.
 
 [![Latest release](https://img.shields.io/github/v/release/afkcodinglol/Soundshark?style=flat-square&color=b42d4c&label=Download)](https://github.com/afkcodinglol/Soundshark/releases/latest)

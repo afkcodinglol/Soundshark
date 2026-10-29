@@ -37,6 +37,8 @@ Never share verification codes with other people.
 
 ## Share, download and report
 
+- **Refresh Sounds** reloads the current catalogue. Successful uploads and
+  deletions refresh automatically while keeping the search and My uploads filter.
 - **Upload Sound** prepares an MP3 copy and independently validates it on the
   service. Each sound is limited to 60 seconds and 10 MB. Only share audio you
   have permission to distribute.

@@ -49,6 +49,13 @@ Never share verification codes with other people.
   verified accounts hide the sound pending review. No email notification is sent.
 
 The service currently limits accounts to five upload attempts per hour and 50
-active uploads, with a shared storage limit. Reports are limited to 20 per day.
+active uploads, with a shared storage limit. Problem reports and sound reports share a limit of six per rolling 12 hours. Suggestions have a separate limit of five per rolling 24 hours. The Owner is exempt from account quotas.
 Hub sounds and uploader names are shared with other Hub users; passwords and
 email addresses are not part of public catalogue listings.
+
+## Issues, suggestions and Owner review
+
+Use **Issues & Suggestions** in the main footer, sign in, and choose **Report a problem** or **Suggestion**.
+Reports can include up to five selected text log files. They are delivered to the Owner's private
+**Admin Tools > Review Reports** inbox. The Owner can mark them resolved or unfixable and remove reported sounds.
+The Owner role is assigned to an account ID by the server; changing a username cannot grant it.

@@ -1,0 +1,4 @@
+project_id = "soundshark-hub"
+
+[functions.sounds-hub]
+verify_jwt = false

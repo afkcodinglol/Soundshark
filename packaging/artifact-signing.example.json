@@ -1,0 +1,11 @@
+{
+  "Endpoint": "https://eus.codesigning.azure.net",
+  "CodeSigningAccountName": "<your-signing-account>",
+  "CertificateProfileName": "<your-public-trust-profile>",
+  "CorrelationId": "Soundshark-1.5.0",
+  "ExcludeCredentials": [
+    "EnvironmentCredential", "ManagedIdentityCredential", "WorkloadIdentityCredential",
+    "SharedTokenCacheCredential", "VisualStudioCredential", "VisualStudioCodeCredential",
+    "AzurePowerShellCredential", "AzureDeveloperCliCredential", "InteractiveBrowserCredential"
+  ]
+}

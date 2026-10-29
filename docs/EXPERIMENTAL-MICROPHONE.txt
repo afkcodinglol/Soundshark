@@ -1,0 +1,7 @@
+Experimental physical microphone playback
+
+This unsigned component requires disabling protected AudioDG system-wide. This reduces Windows audio protection and may affect protected-media playback. It does not change Secure Boot or kernel driver-signature enforcement.
+
+Experimental setup backs up the original Windows setting and microphone effects. Removing the last configured Soundshark microphone restores the saved policy. Restart Windows after installation or removal.
+
+Continue only if you approve this change on this computer. Live compatibility is not yet guaranteed.

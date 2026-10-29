@@ -1,0 +1,5 @@
+Built-in image_gen tool; transparent_background=true.
+
+Create a premium Windows audio editing app icon for Soundshark: one sleek stylized shark swimming to the right, curved silver charcoal body, deep rich burgundy maroon accent along the fin and underside, subtle metallic highlights, confident clean silhouette readable at 32px, compact centered square composition with generous transparent margins. No text, no letters, no border, no square background, no water, no shadow outside the shark. Genuine transparent background. Polished restrained studio branding.
+
+shark.png is the original RGBA generated image. Soundshark.ico contains square, alpha-preserving raster sizes 16, 24, 32, 48, 64, 128, 256. Image generation used the built-in tool, not the API CLI.

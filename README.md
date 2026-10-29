@@ -19,7 +19,9 @@ A native Windows audio studio for recording, editing, converting, and playing yo
 
 Capture a moment from your PC, trim a recording, build a soundboard, or convert a folder of audio. Soundshark brings it together in a customizable desktop app, with local audio processing and originals that stay untouched.
 
-![Soundshark Library in dark mode, showing searchable sounds and playback controls](docs/images/library-1.8.8-compact.png)
+![Soundshark Studio with recording, importing, waveform editing, and Zoom, Scroll, and Volume controls](docs/images/studio-1.9.1.png)
+
+![Soundshark Library with colored sound tiles, individual play counts, playback controls, and the List View switch](docs/images/library-1.9.1.png)
 
 ## Made for your everyday audio
 

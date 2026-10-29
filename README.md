@@ -28,6 +28,7 @@ Capture a moment from your PC, trim a recording, build a soundboard, or convert 
 | **🎙️ Record & capture** | Record PC audio or a microphone. Keep the last **1–60 seconds** of PC audio ready to grab with Clipper. |
 | **✂️ Edit with confidence** | Trim a selection, keep only the part you want, and undo or redo edits. Set precise start and end times without changing the original import. |
 | **🎛️ Build your soundboard** | Search your Library, preview locally, color your sound buttons, group by color, and stop individual sounds or everything at once. |
+| **🦈 Discover Sounds Hub** | Sign in, preview community sounds, download them into Library, or share your own clips up to **60 seconds / 10 MB**. [Account and sharing guide](docs/SOUNDS-HUB.md). |
 | **⌨️ Play it your way** | Assign keyboard and mouse shortcuts with **Mic / Preview / Both** routes, modifier controls, and shortcut conflict checks. Microphone playback needs optional setup below. |
 | **🔄 Convert your collection** | Batch convert **MP3, WAV, FLAC, M4A, OGG, Opus, and AIFF** with automatic settings. Compatible streams are preserved without re-encoding. |
 | **🔗 Bring in a clip** | Import individual public **YouTube, Shorts, and TikTok** links with progress and cancellation. Import tools can be updated separately. |

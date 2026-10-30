@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $testId = [Guid]::NewGuid().ToString()
 $registryRoot = "Software\SoundsharkNativeChecks\$testId"
@@ -8,9 +8,10 @@ $slot = '{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7'
 $clsid = '{A08799CD-8535-492D-A1B4-F4C8B51E8779}'
 $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryRoot\$endpoint\FxProperties")
 $key.SetValue('UnrelatedSetting', 'Keep Me')
-function RunHelper([switch]$Restore, [bool]$Expected = $true) {
+function RunHelper([switch]$Restore, [switch]$RestoreAll, [bool]$Expected = $true) {
     $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File', (Join-Path $root 'scripts/ConfigureMicrophone.ps1'), '-TestRoot', $registryRoot, '-TestBackupDirectory', $backups, '-EndpointGuid', $endpoint, '-UserSid', 'S-1-5-21-1-2-3-1001', '-Experimental')
     if ($Restore) { $arguments += '-Restore' }
+    if ($RestoreAll) { $arguments += '-RestoreAll' }
     $previousPreference = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { & powershell @arguments > (Join-Path $root 'outputs/qa/native-registry-helper.txt') 2>&1 } finally { $ErrorActionPreference = $previousPreference }
     if (($LASTEXITCODE -eq 0) -ne $Expected) { Get-Content (Join-Path $root 'outputs/qa/native-registry-helper.txt'); throw 'Registry helper result did not match expectation.' }
@@ -70,10 +71,61 @@ try {
     Write-Output 'PASS explicit protected-audio policy value is restored exactly'
     & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -Enable -TestRoot $registryRoot -TestBackupDirectory $otherBackups
     $policyKey.SetValue('DisableProtectedAudioDG', 2, [Microsoft.Win32.RegistryValueKind]::DWord)
-    & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -RestoreIfUnused -TestRoot $registryRoot -TestBackupDirectory $otherBackups
+    $repairRequired=$false
+    try { & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -RestoreIfUnused -TestRoot $registryRoot -TestBackupDirectory $otherBackups } catch { $repairRequired=$_.Exception.Message -like '*preserved*' }
+    if (!$repairRequired) { throw 'Conflicting policy did not request repair' }
     if ($policyKey.GetValue('DisableProtectedAudioDG') -ne 2) { throw 'Later policy change overwritten' }
+    $policyKey.DeleteValue('DisableProtectedAudioDG', $false)
     $policyKey.Dispose(); Write-Output 'PASS later third-party policy changes are preserved'
-    Write-Output '13 isolated registry checks passed; no live audio endpoint was changed'
+    # Independent cleanup fixtures retain original endpoint and policy backups throughout.
+    $endpoint = [Guid]::NewGuid().ToString('B').ToUpperInvariant()
+    $fixture = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryRoot\$endpoint"); $fixture.Dispose()
+    RunHelper
+    $backupFile = Join-Path $backups ($endpoint + '.json')
+    [IO.File]::Move($backupFile, $backupFile + '.hold')
+    RunHelper -RestoreAll -Expected $false
+    [IO.File]::Move($backupFile + '.hold', $backupFile)
+    Write-Output 'PASS missing endpoint backup blocks full cleanup'
+    $policyFile = Join-Path $backups 'PolicyBackup/AudioPolicy.json'
+    [IO.File]::Move($policyFile, $policyFile + '.hold')
+    RunHelper -RestoreAll -Expected $false
+    [IO.File]::Move($policyFile + '.hold', $policyFile)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$registryRoot\$endpoint\FxProperties", $true)
+    if ($key.GetValue($slot) -ne $clsid) { throw 'Missing policy backup partially restored endpoint' }
+    Write-Output 'PASS missing policy backup leaves endpoint routing untouched and requests repair'
+    $originalModes = [string[]]$key.GetValue($modesName)
+    $key.SetValue($modesName, [string[]]@('{11111111-1111-1111-1111-111111111111}'), [Microsoft.Win32.RegistryValueKind]::MultiString)
+    RunHelper -RestoreAll -Expected $false
+    if ($key.GetValue($modesName)[0] -ne '{11111111-1111-1111-1111-111111111111}') { throw 'Conflicting modes overwritten' }
+    $key.SetValue($modesName, $originalModes, [Microsoft.Win32.RegistryValueKind]::MultiString)
+    Write-Output 'PASS cleanup preserves conflicting processing modes'
+    $firstEndpoint = $endpoint
+    $endpoint = [Guid]::NewGuid().ToString('B').ToUpperInvariant()
+    $fixture = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryRoot\$endpoint"); $fixture.Dispose(); RunHelper
+    $otherKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$registryRoot\$endpoint\FxProperties", $true)
+    $otherKey.SetValue($slot, '{22222222-2222-2222-2222-222222222222}')
+    RunHelper -RestoreAll -Expected $false
+    if ($key.GetValue($slot) -ne $clsid) { throw 'All-endpoint preflight restored one endpoint before finding conflict' }
+    $otherKey.SetValue($slot, $clsid); $otherKey.Dispose()
+    Write-Output 'PASS full cleanup preflights every endpoint before making changes'
+    $saved = Get-Content -LiteralPath $backupFile -Raw | ConvertFrom-Json
+    $saved.PSObject.Properties.Remove('InstalledValues'); $saved.PSObject.Properties.Remove('UserSid'); $saved.Version = 2
+    $saved | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $backupFile
+    RunHelper -RestoreAll
+    $key.Dispose(); $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$registryRoot\$firstEndpoint\FxProperties")
+    if ($key -and $key.GetValueNames() -contains $slot) { throw 'Legacy endpoint backup not restored' }
+    Write-Output 'PASS legacy version 2 endpoint backups restore with the original setup user'
+    RunHelper -RestoreAll
+    Write-Output 'PASS repeated full cleanup is idempotent'
+    $policyKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryRoot\Policy")
+    $policyKey.SetValue('DisableProtectedAudioDG', 1, [Microsoft.Win32.RegistryValueKind]::DWord)
+    $originalOne = Join-Path $backups 'OriginalOne'
+    & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -Enable -TestRoot $registryRoot -TestBackupDirectory $originalOne
+    & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -RestoreIfUnused -TestRoot $registryRoot -TestBackupDirectory $originalOne
+    & (Join-Path $root 'scripts/ExperimentalAudioPolicy.ps1') -RestoreIfUnused -TestRoot $registryRoot -TestBackupDirectory $originalOne
+    if ($policyKey.GetValue('DisableProtectedAudioDG') -ne 1) { throw 'Original disabled policy was changed' }
+    $policyKey.Dispose(); Write-Output 'PASS an originally disabled policy is preserved and permits repeated cleanup'
+    Write-Output '20 isolated registry checks passed; no live audio endpoint was changed'
 } finally {
     if ($key) { $key.Dispose() }
     # Exact fixture subtree created above; never enumerate or remove real audio-device keys.

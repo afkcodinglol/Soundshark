@@ -1,4 +1,4 @@
-param([switch]$Enable, [switch]$RestoreIfUnused, [string]$TestRoot, [string]$TestBackupDirectory)
+﻿param([switch]$Enable, [switch]$RestoreIfUnused, [switch]$ValidateRestore, [string]$TestRoot, [string]$TestBackupDirectory)
 $ErrorActionPreference = 'Stop'
 $base = [Microsoft.Win32.Registry]::LocalMachine
 $capture = 'SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture'
@@ -18,23 +18,33 @@ function SavePolicy($value) {
     $temporary = $file + '.new'; $value | ConvertTo-Json | Set-Content -LiteralPath $temporary
     if (Test-Path -LiteralPath $file) { [IO.File]::Replace($temporary, $file, [NullString]::Value) } else { [IO.File]::Move($temporary, $file) }
 }
-if ($RestoreIfUnused) {
+if ($RestoreIfUnused -or $ValidateRestore) {
+    if (!$ValidateRestore) {
     $devices = $base.OpenSubKey($capture)
     if ($devices) { try { foreach ($id in $devices.GetSubKeyNames()) {
         $fx = $devices.OpenSubKey("$id\FxProperties")
         if ($fx) { try { if ($fx.GetValue('{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},7') -eq '{A08799CD-8535-492D-A1B4-F4C8B51E8779}') { return } } finally { $fx.Dispose() } }
     } } finally { $devices.Dispose() } }
-    if (!(Test-Path -LiteralPath $file)) { return }
+    }
+    if (!(Test-Path -LiteralPath $file)) {
+        throw 'Original AudioDG policy backup is missing. Restore stopped. Recover PolicyBackup/AudioPolicy.json from the original installation or contact support; do not guess registry values.'
+    }
     $saved = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
-    if ($saved.Restored) { return }
-    $key = $base.OpenSubKey($policy, $true)
-    if (!$key) { return }
+    if ($null -eq $saved.Exists -or !$saved.Kind -or $null -eq $saved.Restored) { throw 'The audio policy backup is incomplete. Restore the original backup before cleanup.' }
+    $key = $base.OpenSubKey($policy, !$ValidateRestore)
+    if (!$key) {
+        if (!$saved.Exists) { return }
+        throw 'Windows audio policy was removed after setup. Repair stopped to preserve later changes.'
+    }
     try {
+        $exists = $key.GetValueNames() -contains $name
+        $matchesOriginal = (!$saved.Exists -and !$exists) -or ($saved.Exists -and $exists -and $key.GetValueKind($name).ToString() -eq $saved.Kind -and $key.GetValue($name) -eq $saved.Value)
+        if ($matchesOriginal) { if (!$ValidateRestore) { $saved.Restored=$true; SavePolicy $saved }; return }
         if ($key.GetValue($name) -ne 1 -or $key.GetValueKind($name) -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
-            $exists = $key.GetValueNames() -contains $name
-            if ((!$saved.Exists -and !$exists) -or ($saved.Exists -and $exists -and $key.GetValueKind($name).ToString() -eq $saved.Kind -and $key.GetValue($name) -eq $saved.Value)) { $saved.Restored=$true; SavePolicy $saved; return }
-            Write-Warning 'Audio policy changed after setup; its current value was preserved.'; return
+            throw 'Audio policy changed after setup. Its current value was preserved. Review PolicyBackup/AudioPolicy.json with support before cleanup.'
         }
+        if ($saved.Restored) { throw 'AudioDG policy changed after it was restored. Repair stopped to preserve later changes.' }
+        if ($ValidateRestore) { return }
         if ($saved.Exists) { $key.SetValue($name, $saved.Value, [Microsoft.Win32.RegistryValueKind]([Enum]::Parse([Microsoft.Win32.RegistryValueKind], $saved.Kind))) }
         else { $key.DeleteValue($name, $false) }
         $key.Flush(); $saved.Restored = $true

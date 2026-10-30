@@ -58,7 +58,10 @@ public partial class MainWindow : Window
     readonly LibraryPane library;
     readonly ConverterPane converter;
     CancellationTokenSource? job;
-    bool closing;
+    bool closing, explicitExit, microphoneInitialized;
+    VirtualMicTray? tray;
+    readonly MicrophoneRoutingController microphoneRoutes;
+    public string VirtualMicStatus => microphoneRoutes.Status;
     readonly CancellationTokenSource startupChecks = new();
     bool importToolUpdateAvailable;
     public bool CaptureStarting { get; set; }
@@ -82,7 +85,8 @@ public partial class MainWindow : Window
             catch (Exception ex) { Settings.Appearance = previous; Error(ex, "appearance.mode"); }
         };
         IssuesButton.Click += async (_, _) => await OpenIssues();
-        Soundboard = new(() => Settings.Soundboard);
+        Soundboard = new(() => Settings.Soundboard, () => microphoneRoutes?.Mixer, transmissionAllowed: () => microphoneRoutes?.SafeForTransmission == true);
+        microphoneRoutes = new(Settings.Soundboard);
         Hotkeys = new(binding => library?.Execute(binding));
         UiSettingsButton.Click += (_, _) => {
             if (!Available) return;
@@ -121,6 +125,12 @@ public partial class MainWindow : Window
             else Error("Drop one MP3 or WAV in The Studio, or use Audio Converter for multiple files and other formats.");
         };
         Loaded += async (_, _) => { await library.Refresh(); try { if (Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") == null) { Hotkeys.Update(Settings.Soundboard); _ = RestoreHub(); _ = Updates.Check(); _ = CheckImportToolUpdates(); } } catch (Exception ex) { Error(ex, "soundboard.hotkeys"); } };
+        Loaded += async (_, _) => {
+            if (microphoneInitialized || Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") != null) return;
+            microphoneInitialized = true;
+            try { await Soundboard.ChangeRouteAsync(() => microphoneRoutes.InitializeAsync()); }
+            catch (Exception ex) { Error(ex, "virtual.startup"); }
+        };
         Closing += OnClosing;
     }
     async Task RestoreHub()
@@ -195,9 +205,17 @@ public partial class MainWindow : Window
     }
     public async Task ApplySoundboardSettings(SoundboardConfiguration candidate)
     {
-        candidate = candidate.ForSoundOutput(); candidate.Validate(); await Soundboard.StopAsync(); Player.Stop(); var previous = Settings.Soundboard;
-        try { if (Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") == null) Hotkeys.Update(candidate); Settings.Soundboard = candidate; await Settings.Save(); }
-        catch { Settings.Soundboard = previous; if (Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") == null) Hotkeys.Update(previous); throw; }
+        candidate = candidate.ForSoundOutput(); candidate.Validate(); Player.Stop();
+        bool previouslySuspended = Hotkeys.Suspended; Hotkeys.Suspended = true;
+        try {
+            await Soundboard.ChangeRouteAsync(() => microphoneRoutes.ApplyAsync(candidate, async value => {
+                Settings.Soundboard = value;
+                if (Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") == null) Hotkeys.Update(value);
+                await Settings.Save();
+            }));
+            if (!candidate.UsesContinuousVirtualMic && IsVisible) { tray?.Dispose(); tray = null; }
+        } finally { Hotkeys.Suspended = previouslySuspended; }
+
     }
     public async Task OpenStudio(string path) { if (!Available) return; Tabs.SelectedIndex = 0; await Studio.Import(path); }
     void Shortcuts(object sender, KeyEventArgs e)
@@ -208,14 +226,35 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space) pane.TogglePlay(); else if (ctrl && e.Key == Key.A) pane.SelectAll(); else if (e.Key == Key.Delete) pane.Trim(); else if (ctrl && e.Key == Key.Z) pane.Undo(); else if (ctrl && e.Key == Key.Y) pane.Redo(); else if (ctrl && e.Key == Key.S) _ = pane.Save(); else return;
         e.Handled = true;
     }
+    public void OpenFromTray() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); }
+    public async Task ToggleVirtualMic()
+    {
+        if (!Available) { OpenFromTray(); Error("Finish the current recording or task before changing microphone routing."); return; }
+        try { await ApplySoundboardSettings(Settings.Soundboard with { Backend = MicrophoneBackend.VirtualCable, VirtualRoutingEnabled = !Settings.Soundboard.UsesContinuousVirtualMic }); }
+        catch (Exception ex) { OpenFromTray(); Error(ex, "virtual.toggle"); }
+    }
+    public void ExitFromTray()
+    {
+        if (Settings.Soundboard.UsesContinuousVirtualMic && MessageBox.Show(this, "Exit Soundshark? CABLE Output will become silent because Soundshark supplies your voice and clips. Your voice app will need another microphone until Soundshark is running again.", "Exit Soundshark Virtual Mic", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        explicitExit = true; OpenFromTray(); Close();
+    }
     async void OnClosing(object? sender, CancelEventArgs e)
     {
         if (closing) return; e.Cancel = true;
+        if (MicrophoneLifetime.HideOnClose(Settings.Soundboard, explicitExit)) {
+            try { tray ??= new VirtualMicTray(this); Hide(); }
+            catch (Exception ex) { Error(ex, "virtual.tray"); }
+            return;
+        }
+        explicitExit = false;
         if (job != null || CaptureStarting) { PendingRollback = null; Updates.RestartAfterInstall = false; Error("Finish or cancel the active task before closing."); return; }
         if ((Studio.Workspace.Dirty || Studio.Recording) && MessageBox.Show(this, "Close without saving to Library? Save your audio before closing if you want to keep it.", "Unsaved Audio", MessageBoxButton.YesNo) != MessageBoxResult.Yes) { PendingRollback = null; Updates.RestartAfterInstall = false; return; }
         startupChecks.Cancel(); await Updates.Stop();
         UpdateHint.Set(UpdateTools, false, true); UpdateHint.Set(UpdateAppButton, false, true);
-        await Soundboard.StopAsync(); Hotkeys.Dispose(); await Studio.ShutdownClipper();
+        try { await Soundboard.ChangeRouteAsync(() => microphoneRoutes.StopAsync()); }
+        catch (Exception ex) { Error(ex, "virtual.shutdown"); return; }
+        tray?.Dispose(); tray = null;
+        Hotkeys.Dispose(); await Studio.ShutdownClipper();
         try { await Studio.StopRecording(); await Studio.Journal(); await Settings.Save(); }
         catch (Exception ex) { AppLog.Error("application.close.save", ex); }
         Player.Dispose(); library.Dispose(); hub?.Dispose();

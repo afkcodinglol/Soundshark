@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 
 namespace Soundshark;
@@ -39,6 +39,8 @@ public sealed class Settings
             settings.LibraryColors = SoundColors.Normalize(settings.LibraryColors);
             try { settings.Appearance ??= new(); if (!Theme.Fonts.Contains(settings.Appearance.Font)) settings.Appearance = settings.Appearance with { Font = "Segoe UI" }; settings.Appearance = settings.Appearance with { ShowFileDetails=true }; settings.Appearance.Validate(); } catch (Exception ex) { AppLog.Warn("appearance.load", ex); settings.Appearance = new(); }
             try { settings.Soundboard ??= new(); settings.Soundboard.Validate(); } catch (Exception ex) { AppLog.Warn("soundboard.settings.load", ex); settings.Soundboard = new(); }
+            if (settings.Soundboard.Backend == Soundshark.Core.MicrophoneBackend.VirtualCable && string.IsNullOrEmpty(settings.Soundboard.VirtualVoiceEndpointId))
+                settings.Soundboard = settings.Soundboard with { VirtualVoiceEndpointId = settings.Soundboard.MicrophoneEndpointId };
             settings.Soundboard = settings.Soundboard.ForSoundOutput();
             return settings; }
         catch (Exception ex) { AppLog.Warn("settings.load", ex); return new(); }

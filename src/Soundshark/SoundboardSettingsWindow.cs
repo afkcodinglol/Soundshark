@@ -1,4 +1,6 @@
-using System.Globalization;
+﻿using System.Globalization;
+using System.Diagnostics;
+using System.Windows.Threading;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,8 +17,16 @@ public sealed class SoundboardSettingsWindow : Window
 {
     readonly MainWindow main;
     readonly SoundboardConfiguration original;
+    bool saving;
     readonly ComboBox microphone = new() { MinWidth = 400, DisplayMemberPath = "Name" }, speakers = new() { MinWidth = 400, DisplayMemberPath = "Name" };
     readonly CheckBox monitor, block, activation, autoStop, repeat;
+    readonly ComboBox mode = new() { Name="MicrophoneMode",MinWidth=400,DisplayMemberPath="Name" };
+    readonly ComboBox voice = new() {Name="VirtualVoiceSource",MinWidth=400,DisplayMemberPath="Name"}, cable = new(){Name="VirtualCablePlayback",MinWidth=400,DisplayMemberPath="Name"}, cableRecording = new(){Name="VirtualCableRecording",MinWidth=400,DisplayMemberPath="Name"};
+    readonly CheckBox enableVirtual = new(){Name="EnableVirtualMic",Content="Enable Virtual Mic (starts voice passthrough when saved)",Margin=new Thickness(0,8,0,8)};
+    readonly StackPanel virtualOptions=new(), physicalOptions=new();
+    readonly TextBlock virtualStatus=Ui.Text("",12,true), destinationHint=Ui.Text("",13,true), protectionStatus=Ui.Text("",12,true);
+    readonly DispatcherTimer statusTimer = new(){Interval=TimeSpan.FromSeconds(1)};
+    sealed record Mode(MicrophoneBackend Backend,string Name) { public override string ToString() => Name; }
     readonly Slider soundVolume;
     readonly TextBox startDelay, relativeDelay, leadIn, releaseDelay, activationPath;
     readonly TextBlock error = Ui.Text("", 13), setupStatus = Ui.Text("", 12, true);
@@ -49,24 +59,36 @@ public sealed class SoundboardSettingsWindow : Window
     public SoundboardSettingsWindow(MainWindow owner)
     {
         main = owner; original = owner.Settings.Soundboard; error.Foreground=System.Windows.Media.Brushes.IndianRed; SetResourceReference(StyleProperty, typeof(Window));
+        Closing += (_, e) => { if (saving) e.Cancel = true; };
         Owner = owner; Title = "Soundboard Settings"; Width = 920; Height = 760; MinWidth = 780; MinHeight = 600; WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false;
         SourceInitialized += (_, _) => { int dark = 1, black = 0; var handle = new WindowInteropHelper(this).Handle; DwmSetWindowAttribute(handle, 20, ref dark, 4); DwmSetWindowAttribute(handle, 35, ref black, 4); };
         var root = new Grid { Margin = new Thickness(22) }; root.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) }); root.RowDefinitions.Add(new() { Height = GridLength.Auto }); Content = root;
         var tabs = new TabControl(); root.Children.Add(tabs);
         var audio = new StackPanel { Margin = new Thickness(0, 0, 10, 0) };
         Heading(audio, "Microphone Setup");
-        audio.Children.Add(Ui.Text("Choose the same microphone in Soundshark and your voice app. Preview is only for you; Play Through Mic sends a sound to that microphone.", 13, true));
-        using (var enumerator = new MMDeviceEnumerator()) {
-            var capture = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).Select(d => { var result = new Device(d.ID, d.FriendlyName); d.Dispose(); return result; }).ToArray();
-            var render = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active).Select(d => { var result = new Device(d.ID, d.FriendlyName); d.Dispose(); return result; }).ToArray();
-            string? defaultId = null; try { using var preferred = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications); defaultId = preferred.ID; } catch (Exception ex) { AppLog.Warn("soundboard.devices.default", ex); }
-            microphone.ItemsSource = capture; microphone.SelectedItem = capture.FirstOrDefault(d => d.Id == original.MicrophoneEndpointId) ?? capture.FirstOrDefault(d => d.Id == defaultId) ?? capture.FirstOrDefault();
-            speakers.ItemsSource = new[] { new Device("", "Windows Default Speakers / Headphones") }.Concat(render).ToArray(); speakers.SelectedItem = speakers.Items.Cast<Device>().FirstOrDefault(d => d.Id == original.MonitorEndpointId) ?? speakers.Items[0];
-        }
-        Field(audio, "Microphone", microphone); audio.Children.Add(setupStatus);
-        audio.Children.Add(Ui.Text("Experimental setup disables protected AudioDG system-wide so this unsigned component can load. This reduces Windows audio protection and may affect protected-media playback. Remove support restores the saved policy after the last configured microphone is removed.", 12, true));
-        audio.Children.Add(Ui.Row(Ui.Button("Enable Microphone Playback", () => Install(false)), Ui.Button("Remove Microphone Support", () => Install(true))));
-        microphone.SelectionChanged += (_, _) => UpdateSetup(); UpdateSetup();
+        mode.ItemsSource = new[]{new Mode(MicrophoneBackend.VirtualCable,"Soundshark Virtual Mic — VB-CABLE"),new Mode(MicrophoneBackend.NativeMicrophone,"Physical Mic — Experimental")};
+        mode.SelectedItem = mode.Items.Cast<Mode>().First(m=>m.Backend==(original.Backend==MicrophoneBackend.NativeMicrophone?MicrophoneBackend.NativeMicrophone:MicrophoneBackend.VirtualCable));
+        Field(audio,"Microphone Mode",mode);
+        audio.Children.Add(Ui.Text("VB-CABLE is recommended for new setups. Routing stays off until you explicitly enable it and save. The Soundshark option name does not create or rename a Windows device.",12,true));
+        enableVirtual.IsChecked=original.VirtualRoutingEnabled;
+        Field(virtualOptions,"Physical Voice Source",voice);
+        Field(virtualOptions,"Cable Playback Endpoint",cable);
+        Field(virtualOptions,"Cable Recording Endpoint",cableRecording);
+        virtualOptions.Children.Add(enableVirtual); virtualOptions.Children.Add(destinationHint); virtualOptions.Children.Add(virtualStatus);
+        virtualOptions.Children.Add(Ui.Text("Keep Soundshark running for voice passthrough. Closing its main window keeps it in the tray. Local clip monitoring never includes live voice.",12,true));
+        virtualOptions.Children.Add(Ui.Row(Ui.Button("Get VB-CABLE (Official)",()=>Process.Start(new ProcessStartInfo("https://vb-audio.com/Cable/"){UseShellExecute=true})),Ui.Button("Refresh Devices",()=>RefreshDevices())));
+        Field(physicalOptions,"Microphone",microphone); physicalOptions.Children.Add(setupStatus);
+        physicalOptions.Children.Add(Ui.Text("Choose this same physical microphone in Discord / your game. Current unsigned experimental setup disables protected AudioDG system-wide. It requires administrator access and a Windows restart.",12,true));
+        physicalOptions.Children.Add(Ui.Row(Ui.Button("Enable Microphone Playback",()=>Install(false)),Ui.Button("Remove Microphone Support",()=>Install(true))));
+        audio.Children.Add(virtualOptions); audio.Children.Add(physicalOptions); audio.Children.Add(protectionStatus);
+        audio.Children.Add(Ui.Button("Remove Experimental Support & Restore Previous Settings",()=>{
+            if(MessageBox.Show(this,"Remove experimental microphone support from all configured microphones and restore backed-up endpoint effects and audio policy? This requires administrator approval and may require a Windows restart. Missing backups or conflicting changes will stop cleanup for repair.","Restore Previous Audio Settings",MessageBoxButton.YesNo,MessageBoxImage.Warning)!=MessageBoxResult.Yes)return;
+            try{MicrophoneSetup.RemoveAll();}catch(Exception ex){error.Text=ex.Message;}
+        }));
+        mode.SelectionChanged+=(_,_)=>UpdateMode(); microphone.SelectionChanged+=(_,_)=>UpdateSetup(); cableRecording.SelectionChanged+=(_,_)=>UpdateMode();
+        RefreshDevices(); UpdateMode(); UpdateSetup();
+        statusTimer.Tick+=(_,_)=>{virtualStatus.Text=main.VirtualMicStatus;protectionStatus.Text=MicrophoneSetup.ProtectionStatus;};
+        Loaded+=(_,_)=>statusTimer.Start(); Closed+=(_,_)=>statusTimer.Stop();
         Field(audio, "Preview / Monitor Output", speakers);
         monitor = Check("Also Hear Sounds I Send Through My Mic", original.HearTransmittedSounds); audio.Children.Add(monitor);
         block = Check("Block My Voice While A Sound Is Playing", original.BlockVoiceDuringSounds); audio.Children.Add(block);
@@ -102,6 +124,34 @@ public sealed class SoundboardSettingsWindow : Window
         parent.Children.Add(Ui.Row(label, key, Ui.Button("Clear",key.ClearBinding), route)); route.Visibility = command == SoundboardCommand.PlaySound ? Visibility.Visible : Visibility.Collapsed;
         bindings.Add((command, file, key, route));
     }
+    void RefreshDevices()
+    {
+        try {
+            using var enumerator = new MMDeviceEnumerator();
+            Device[] Devices(DataFlow flow)=>enumerator.EnumerateAudioEndPoints(flow,DeviceState.Active).Select(d=>{using(d)return new Device(d.ID,d.FriendlyName);}).ToArray();
+            var captures=Devices(DataFlow.Capture);var renders=Devices(DataFlow.Render);
+            void Fill(ComboBox control,Device[] items,string saved,Func<Device,bool>? preferred=null) {
+                string id=(control.SelectedItem as Device)?.Id??saved;
+                if(id.Length>0&&!items.Any(d=>d.Id==id))items=items.Append(new Device(id,"Unavailable — "+id)).ToArray();
+                control.ItemsSource=items;
+                control.SelectedItem=id.Length>0?items.FirstOrDefault(d=>d.Id==id):items.FirstOrDefault(preferred??(_=>true));
+            }
+            Fill(microphone,captures,original.MicrophoneEndpointId,d=>!d.Name.Contains("CABLE",StringComparison.OrdinalIgnoreCase));
+            Fill(voice,captures,original.VirtualVoiceEndpointId,d=>!d.Name.Contains("CABLE",StringComparison.OrdinalIgnoreCase));
+            Fill(cable,renders,original.TransmissionEndpointId,d=>d.Name.Contains("CABLE",StringComparison.OrdinalIgnoreCase));
+            Fill(cableRecording,captures,original.CableRecordingEndpointId,d=>d.Name.Contains("CABLE",StringComparison.OrdinalIgnoreCase));
+            Fill(speakers,new[]{new Device("","Windows Default Speakers / Headphones")}.Concat(renders).ToArray(),original.MonitorEndpointId);
+            UpdateMode();
+        }catch(Exception ex){error.Text="Could not refresh audio devices. "+ex.Message;}
+    }
+    void UpdateMode()
+    {
+        bool useVirtual=(mode.SelectedItem as Mode)?.Backend==MicrophoneBackend.VirtualCable;
+        virtualOptions.Visibility=useVirtual?Visibility.Visible:Visibility.Collapsed;
+        physicalOptions.Visibility=useVirtual?Visibility.Collapsed:Visibility.Visible;
+        destinationHint.Text="In Discord / games, select the microphone: "+((cableRecording.SelectedItem as Device)?.Name??"CABLE Output (install VB-CABLE separately, then refresh devices)")+". Do not select the physical voice source for this mode.";
+        virtualStatus.Text=main.VirtualMicStatus;protectionStatus.Text=MicrophoneSetup.ProtectionStatus;
+    }
     void UpdateSetup() { setupStatus.Text = microphone.SelectedItem is Device device ? MicrophoneSetup.Status(device.Id) : "No microphone found. Connect a microphone and reopen Settings."; }
     void Install(bool remove)
     {
@@ -110,11 +160,12 @@ public sealed class SoundboardSettingsWindow : Window
     }
     async Task Save()
     {
+        if (saving) return;
         try {
             double Read(TextBox box) => double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : throw new SoundboardException("Enter a valid number for each timing setting.");
             int Milliseconds(TextBox box) { double value = Read(box); if (!double.IsFinite(value) || value != Math.Truncate(value) || value < int.MinValue || value > int.MaxValue) throw new SoundboardException("Enter whole milliseconds for timing settings."); return (int)value; }
             var candidate = original with {
-                Backend = MicrophoneBackend.NativeMicrophone, MicrophoneEndpointId = (microphone.SelectedItem as Device)?.Id ?? "", MonitorEndpointId = (speakers.SelectedItem as Device)?.Id ?? "",
+                Backend = ((Mode)mode.SelectedItem).Backend, VirtualVoiceEndpointId=(voice.SelectedItem as Device)?.Id ?? "", TransmissionEndpointId=(cable.SelectedItem as Device)?.Id ?? "", CableRecordingEndpointId=(cableRecording.SelectedItem as Device)?.Id ?? "", VirtualRoutingEnabled=enableVirtual.IsChecked==true, MicrophoneEndpointId = (microphone.SelectedItem as Device)?.Id ?? "", MonitorEndpointId = (speakers.SelectedItem as Device)?.Id ?? "",
                 TransmittedSoundVolume = soundVolume.Value / 100,
                 HearTransmittedSounds = monitor.IsChecked == true, BlockVoiceDuringSounds = block.IsChecked == true,
                 StartDelayMs = Milliseconds(startDelay), RelativeMicrophoneDelayMs = Milliseconds(relativeDelay), AutoKeyLeadInMs = Milliseconds(leadIn), AutoKeyReleaseDelayMs = Milliseconds(releaseDelay),
@@ -124,8 +175,10 @@ public sealed class SoundboardSettingsWindow : Window
                 Bindings = original.Bindings.Where(b => b.Command == SoundboardCommand.PlaySound).Concat(bindings.Where(b => b.Key.Chord != null).Select(b => new SoundboardBinding { Chord = b.Key.Chord!, Command = b.Command, SoundFilename = b.File, Route = (SoundboardRoute)b.Route.SelectedItem })).ToArray(),
                 AutoKeys = [], AutoKeysEnabled = false
             };
-            candidate = candidate.ForSoundOutput(); candidate.Validate(); await main.ApplySoundboardSettings(candidate); Close();
+            candidate = candidate.ForSoundOutput(); candidate.Validate(); saving = true; IsEnabled = false;
+            await main.ApplySoundboardSettings(candidate); saving = false; Close();
         } catch (ArgumentException ex) { error.Text = ex.Message; AppLog.Error("soundboard.settings.validation", ex); }
         catch (Exception ex) { error.Text = UserErrors.Report(ex, "soundboard.settings").Inline; }
+        finally { saving = false; IsEnabled = true; }
     }
 }

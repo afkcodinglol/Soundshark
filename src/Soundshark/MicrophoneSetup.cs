@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Security.Principal;
 using Microsoft.Win32;
@@ -6,6 +6,28 @@ using Microsoft.Win32;
 namespace Soundshark;
 public static class MicrophoneSetup
 {
+    public static string ProtectionStatus
+    {
+        get {
+            try {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Audio");
+                var value = key?.GetValue("DisableProtectedAudioDG");
+                return value is int number && number == 1
+                    ? "Protected AudioDG is currently DISABLED by Windows policy. Choosing virtual routing alone does not re-enable it. Use the explicit cleanup action to restore the saved settings."
+                    : value == null || value is int zero && zero == 0
+                        ? "Protected AudioDG is enabled by policy. Virtual routing performs no audio-policy writes."
+                        : "Windows has a custom AudioDG policy value. Virtual routing leaves it unchanged; review it before claiming protection is enabled.";
+            } catch { return "AudioDG protection status could not be read. Virtual routing does not change this policy."; }
+        }
+    }
+    public static void RemoveAll()
+    {
+        string setup = Path.Combine(AppContext.BaseDirectory, "Native", "Soundshark-Microphone-Setup-x64.exe");
+        if (!File.Exists(setup)) throw new SoundboardException("The experimental cleanup package is missing. Use the complete local portable package. No Windows policy was changed.");
+        var start = new ProcessStartInfo(setup) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Normal };
+        start.ArgumentList.Add("/REMOVE_ALL_SUPPORT=1");
+        using var identity = WindowsIdentity.GetCurrent(); start.ArgumentList.Add("/USER_SID=" + identity.User!.Value); Process.Start(start);
+    }
     public const string Clsid = "{A08799CD-8535-492D-A1B4-F4C8B51E8779}";
     public static bool DevelopmentBuild => File.Exists(Path.Combine(AppContext.BaseDirectory, "Native", "UNSIGNED-DEVELOPMENT.txt"));
     public static bool ExperimentalEnabled {

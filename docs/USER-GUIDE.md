@@ -24,7 +24,7 @@ Search your saved audio, preview locally, or use the optional **Play Through Mic
 
 Choose **Shortcut** from a sound's three-dot menu to assign keyboard or mouse shortcuts with Mic, Preview, or Both routing, and optional push-to-talk keys held during playback. Input boxes capture mouse buttons directly; see the detailed shortcut instructions below.
 
-Physical microphone playback is experimental and requires separate system setup. Read the [microphone guide](MICROPHONE.md) before enabling it.
+Soundboard Settings offers **Soundshark Virtual Mic — VB-CABLE** (continuous voice and clips; select **CABLE Output** in Discord/games) and **Physical Mic — Experimental** (select your physical microphone). VB-CABLE is installed separately and virtual routing stays off until enabled. Physical setup uses the existing unsigned component and disables protected AudioDG. Read the [microphone guide](MICROPHONE.md) for setup, tray behavior and restoring previous audio settings.
 
 ## Convert audio
 

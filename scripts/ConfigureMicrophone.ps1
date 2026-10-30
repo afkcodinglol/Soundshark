@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$EndpointGuid,
     [string]$UserSid,
     [switch]$Restore,
@@ -37,11 +37,11 @@ trap {
     throw $_
 }
 function Canonical([string]$value) { return ([Guid]::Parse($value)).ToString('B').ToUpperInvariant() }
-function Policy([switch]$Enable) {
+function Policy([switch]$Enable, [switch]$Validate) {
     if ($PlanOnly) { return }
     $arguments = @{}
     if ($TestRoot) { $arguments.TestRoot=$TestRoot; $arguments.TestBackupDirectory=$TestBackupDirectory }
-    if ($Enable) { $arguments.Enable=$true } else { $arguments.RestoreIfUnused=$true }
+    if ($Validate) { $arguments.ValidateRestore=$true } elseif ($Enable) { $arguments.Enable=$true } else { $arguments.RestoreIfUnused=$true }
     & (Join-Path $PSScriptRoot 'ExperimentalAudioPolicy.ps1') @arguments
 }
 function Snapshot($key) {
@@ -65,20 +65,44 @@ function RestoreValues($key, $values) {
     }
     $key.Flush()
 }
-function RestoreEndpoint([string]$id) {
+function SameSnapshot($left, $right) {
+    return ($left | ConvertTo-Json -Depth 8 -Compress) -eq ($right | ConvertTo-Json -Depth 8 -Compress)
+}
+function ExpectedInstalled($saved) {
+    if ($saved.InstalledValues) { return $saved.InstalledValues }
+    $sid = if ($saved.UserSid) { $saved.UserSid } elseif ($UserSid) { $UserSid } else { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+    if (!$sid) { throw 'The original setup user cannot be identified. Recover the original endpoint backup before cleanup.' }
+    $originalSlot = $saved.Values | Where-Object Name -eq $slot
+    $originalModes = $saved.Values | Where-Object Name -eq $modes
+    $originalAssociation = $saved.Values | Where-Object Name -eq $association
+    $values = @()
+    foreach ($name in $names) {
+        $kind='String'; $value=$null
+        if ($name -eq $slot) { $value=$clsid }
+        elseif ($name -eq $previous) { $value=[string]$originalSlot.Value }
+        elseif ($name -eq $sidProperty) { $value=$sid }
+        elseif ($name -eq $modes) { $kind='MultiString'; $value=[string[]]$(if ($originalSlot.Exists -and $originalSlot.Value) { @($originalModes.Value) } else { $requiredModes }) }
+        elseif ($name -eq $association) { if ($originalAssociation.Exists) { $kind=$originalAssociation.Kind; $value=$originalAssociation.Value } else { $value='{00000000-0000-0000-0000-000000000000}' } }
+        $values += [pscustomobject]@{Name=$name;Exists=$true;Kind=$kind;Value=$value}
+    }
+    return $values
+}
+function RestoreEndpoint([string]$id, [switch]$CheckOnly) {
     $id = Canonical $id; $file = Join-Path $backupDirectory ($id + '.json')
-    if (!(Test-Path -LiteralPath $file)) { throw "No Soundshark backup exists for $id. No endpoint changes were made." }
+    if (!(Test-Path -LiteralPath $file)) { throw "No Soundshark backup exists for $id. Recover the original EndpointBackups file; no endpoint changes were made." }
     $saved = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
-    if ((Canonical $saved.Endpoint) -ne $id) { throw 'Endpoint backup identity mismatch.' }
-    $key = $base.OpenSubKey("$root\$id\FxProperties", !$PlanOnly)
-    if (!$key) { return }
+    if ((Canonical $saved.Endpoint) -ne $id -or @($saved.Values).Count -ne $names.Count) { throw 'Endpoint backup identity or properties are incomplete. Recover the original backup before repair.' }
+    if (@($saved.Values | ForEach-Object Name | Sort-Object -Unique).Count -ne $names.Count -or @($saved.Values | Where-Object { $_.Name -notin $names }).Count) { throw 'Endpoint backup properties are invalid. No endpoint changes were made.' }
+    $key = $base.OpenSubKey("$root\$id\FxProperties", !($PlanOnly -or $CheckOnly))
+    if (!$key) {
+        if ($saved.CreatedEffectsStore) { return }
+        throw 'The original effects store is missing. Repair stopped to preserve later changes.'
+    }
     try {
-        if ($key.GetValue($slot) -ne $clsid) {
-            # A previous restore may have completed before a subsequent installer failure.
-            $original = $saved.Values | Where-Object Name -eq $slot
-            if (($original.Exists -and $key.GetValue($slot) -eq $original.Value) -or (!$original.Exists -and !($key.GetValueNames() -contains $slot))) { return }
-            throw 'Another application changed the endpoint effect. Restore was stopped to preserve its changes.'
-        }
+        $current = Snapshot $key
+        if (SameSnapshot $current $saved.Values) { return }
+        if (!(SameSnapshot $current (ExpectedInstalled $saved))) { throw 'Another application changed endpoint effects after setup. Restore stopped to preserve those changes. Review the endpoint backup with support.' }
+        if ($CheckOnly) { return }
         if (!$PlanOnly) { RestoreValues $key $saved.Values }
     } finally { $key.Dispose() }
     if (!$PlanOnly -and $saved.CreatedEffectsStore) {
@@ -94,11 +118,16 @@ function RestoreEndpoint([string]$id) {
 if ($RestoreAll) {
     $endpoints = $base.OpenSubKey($root)
     if ($endpoints) { try { foreach ($id in $endpoints.GetSubKeyNames()) { $fx = $endpoints.OpenSubKey("$id\FxProperties"); if ($fx) { try { if ($fx.GetValue($slot) -eq $clsid -and !(Test-Path -LiteralPath (Join-Path $backupDirectory ((Canonical $id) + '.json')))) { throw 'A configured endpoint has no rollback backup. Uninstall stopped.' } } finally { $fx.Dispose() } } } } finally { $endpoints.Dispose() } }
-    if (Test-Path -LiteralPath $backupDirectory) { foreach ($file in Get-ChildItem -LiteralPath $backupDirectory -Filter '*.json' -File) { RestoreEndpoint ([IO.Path]::GetFileNameWithoutExtension($file.Name)) } }
+    Policy -Validate
+    if (Test-Path -LiteralPath $backupDirectory) {
+        $savedEndpoints = @(Get-ChildItem -LiteralPath $backupDirectory -Filter '*.json' -File)
+        foreach ($file in $savedEndpoints) { RestoreEndpoint ([IO.Path]::GetFileNameWithoutExtension($file.Name)) -CheckOnly }
+        foreach ($file in $savedEndpoints) { RestoreEndpoint ([IO.Path]::GetFileNameWithoutExtension($file.Name)) }
+    }
     Policy; exit 0
 }
 $EndpointGuid = Canonical $EndpointGuid
-if ($Restore) { RestoreEndpoint $EndpointGuid; Policy; exit 0 }
+if ($Restore) { Policy -Validate; RestoreEndpoint $EndpointGuid; Policy; exit 0 }
 if (!$UserSid -or !([System.Security.Principal.SecurityIdentifier]::new($UserSid))) { throw 'A valid Windows user SID is required.' }
 $key = $base.OpenSubKey("$root\$EndpointGuid\FxProperties", !$PlanOnly)
 $createdEffectsStore = !$key
@@ -138,7 +167,7 @@ try {
         $saved = Get-Content -LiteralPath $backup -Raw | ConvertFrom-Json
         if ((Canonical $saved.Endpoint) -ne $EndpointGuid -or (($saved.Values | ConvertTo-Json -Depth 8 -Compress) -ne ($snapshot | ConvertTo-Json -Depth 8 -Compress))) { throw 'An earlier endpoint backup differs from the current configuration. Setup stopped to preserve both.' }
     }
-    $json = [pscustomobject]@{ Version=2; Endpoint=$EndpointGuid; CreatedEffectsStore=$createdEffectsStore; Values=$snapshot } | ConvertTo-Json -Depth 8
+    $json = [pscustomobject]@{ Version=3; UserSid=$UserSid; Endpoint=$EndpointGuid; CreatedEffectsStore=$createdEffectsStore; Values=$snapshot } | ConvertTo-Json -Depth 8
     if (!$alreadyBackedUp) { $temporary = $backup + '.new'; [IO.File]::WriteAllText($temporary, $json); [IO.File]::Move($temporary, $backup) }
     try {
         if ($Experimental) { Policy -Enable }
@@ -148,5 +177,7 @@ try {
         $key.SetValue($sidProperty, $UserSid, [Microsoft.Win32.RegistryValueKind]::String)
         $key.SetValue($modes, [string[]]$(if ($old) { @($key.GetValue($modes)) } else { $requiredModes }), [Microsoft.Win32.RegistryValueKind]::MultiString)
         $key.SetValue($slot, $clsid, [Microsoft.Win32.RegistryValueKind]::String); $key.Flush()
+        $complete = [pscustomobject]@{Version=3;UserSid=$UserSid;Endpoint=$EndpointGuid;CreatedEffectsStore=$createdEffectsStore;Values=$snapshot;InstalledValues=(Snapshot $key)}
+        $temporary = $backup + '.new'; [IO.File]::WriteAllText($temporary, ($complete | ConvertTo-Json -Depth 8)); [IO.File]::Replace($temporary,$backup,[NullString]::Value)
     } catch { $failure = $_; try { if ($key) { RestoreValues $key $snapshot } } finally { if ($Experimental) { Policy } }; throw $failure }
 } finally { if ($key) { $key.Dispose() } }

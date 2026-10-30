@@ -49,6 +49,10 @@ public sealed record SoundboardConfiguration
     public MicrophoneBackend Backend { get; init; }
     public string MicrophoneEndpointId { get; init; } = "";
     public string TransmissionEndpointId { get; init; } = "";
+    public string VirtualVoiceEndpointId { get; init; } = "";
+    public string CableRecordingEndpointId { get; init; } = "";
+    public bool VirtualRoutingEnabled { get; init; }
+    public bool UsesContinuousVirtualMic => Backend == MicrophoneBackend.VirtualCable && VirtualRoutingEnabled;
     public string MonitorEndpointId { get; init; } = "";
     public double SpeakerVolume { get; init; } = 1;
     public double TransmittedSoundVolume { get; init; } = 1;
@@ -103,6 +107,10 @@ public sealed record SoundboardConfiguration
                 throw new ArgumentException($"{label} must be between {min} and {max}.");
         }
         if (!Enum.IsDefined(Backend) || !Enum.IsDefined(VolumeMode)) throw new ArgumentException("Choose a supported routing and volume mode.");
+        if (UsesContinuousVirtualMic && (string.IsNullOrWhiteSpace(VirtualVoiceEndpointId) || string.IsNullOrWhiteSpace(TransmissionEndpointId) || string.IsNullOrWhiteSpace(CableRecordingEndpointId)))
+            throw new ArgumentException("Choose the physical voice source, CABLE Input playback device and CABLE Output recording device before enabling the virtual microphone.");
+        if (UsesContinuousVirtualMic && (VirtualVoiceEndpointId == CableRecordingEndpointId || (HearTransmittedSounds && MonitorEndpointId == TransmissionEndpointId)))
+            throw new ArgumentException("The voice source and local monitoring must not feed the selected virtual cable back into itself.");
         Range(SpeakerVolume, 0, 2, "Speaker volume");
         Range(TransmittedSoundVolume, 0, 2, "Sound volume");
         Range(VoiceVolume, 0, 2, "Voice volume");

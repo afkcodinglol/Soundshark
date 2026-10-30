@@ -70,9 +70,9 @@ Performance Mode keeps both views available while disabling drag ordering and it
 
 ### Optional microphone playback
 
-**Preview** plays locally. **Play Through Mic** uses an experimental native microphone component to add clips to a selected physical microphone.
+**Preview** plays locally. The local microphone preview build offers **Soundshark Virtual Mic — VB-CABLE**, which mixes continuous voice and clips into separately installed VB-CABLE, and **Physical Mic — Experimental**, which retains the native setup. In virtual mode select **CABLE Output** in Discord/games and keep Soundshark running; closing the main window keeps enabled routing in the tray. Virtual routing stays opt-in and does not change AudioDG protection.
 
-Enabling it requires administrator access and a Windows restart. Setup disables protected AudioDG system-wide, reducing Windows audio protection and potentially affecting protected media. Removing the last supported microphone restores the saved policy. Portable copies require the same machine-wide setup.
+Physical setup requires administrator access and a Windows restart. Its current unsigned component disables protected AudioDG system-wide, reducing Windows audio protection and potentially affecting protected media. Selecting virtual mode alone does not restore a legacy policy change; an explicit cleanup action restores verified backups. Existing users keep their selected route. The new virtual build is local-only pending hardware/platform testing and a separate publication request.
 
 Read the [microphone setup and removal guide](docs/MICROPHONE.md) before enabling it. Compatibility varies by device and voice app; universal Discord/game compatibility is not claimed. Recording, editing, conversion, and local previews are available without this optional component.
 

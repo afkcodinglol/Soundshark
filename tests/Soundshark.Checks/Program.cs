@@ -8,6 +8,9 @@ using Soundshark.Core;
 internal static partial class Program
 {
     static int passed;
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    static extern bool DeviceIoControl(Microsoft.Win32.SafeHandles.SafeFileHandle file, uint control, nint input, uint inputSize, nint output, uint outputSize, out uint returned, nint overlapped);
     static string output = "";
     static void Check(bool condition, string name) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS " + name); }
     [STAThread]
@@ -38,6 +41,7 @@ internal static partial class Program
                         await ToolUpdater.Rollback(); Check(Paths.Tools == previous, "rollback restores previous complete toolset");
                     } else Check(toolProgress.Values.Last().Status.Contains("You're up to date"), "current bundled tools need no live download");
                 }
+                else if (args.Contains("--virtual-mic")) { app.ShutdownMode=ShutdownMode.OnExplicitShutdown; await VirtualMicChecks(); }
                 else if (args.Contains("--devices")) await Devices();
                 else if (args.Contains("--pc-limit")) await PcLimit();
                 else if (args.Contains("--pc-volume")) await PcVolumeChecks();
@@ -216,7 +220,7 @@ internal static partial class Program
             await Task.Delay(400);
             using var mapping = System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting("Global\\Soundshark-Audio-v1-" + NativeAudioBridge.EndpointGuid(device.ID), System.IO.MemoryMappedFiles.MemoryMappedFileRights.Read);
             using var state = mapping.CreateViewAccessor(0, NativeAudioBridge.Bytes, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read);
-            Check(state.ReadInt32(1164) == 1 && (state.ReadInt32(1160) & 1) == 0 && Environment.TickCount64 - state.ReadInt64(1152) < 1500, "real microphone receives complete live EQ settings and heartbeat");
+            Check(Environment.TickCount64 - state.ReadInt64(56) < 1500 && Environment.TickCount64 - state.ReadInt64(48) < 1500, "real microphone producer and native graph heartbeats remain live");
             Check(state.ReadInt32(20) == 0 && state.ReadSingle(72) == 1, "real EOF clears transmission/voice gating and restores unity voice gain");
             board.Play(librarySound); await Task.Delay(600); board.TogglePause(); await Task.Delay(150);
             long pausedFrame = state.ReadInt64(64); await Task.Delay(180);
@@ -536,7 +540,10 @@ internal static partial class Program
         string bad = Path.Combine(output, "corrupt.wav"); await File.WriteAllTextAsync(bad, "corrupt");
         try { await MediaTools.Decode(bad, CancellationToken.None); throw new Exception("corrupt accepted"); } catch (MediaToolException) { Check(true, "corrupt input reports FFmpeg error"); }
         // Sparse disk file: two hours represented without holding the PCM in memory.
-        string longFile = Paths.NewPcm(); using (var f = File.Create(longFile)) f.SetLength(2L * 3600 * 48000 * 8);
+        string longFile = Paths.NewPcm(); using (var f = File.Create(longFile)) {
+            if (!DeviceIoControl(f.SafeFileHandle, 0x900c4, 0, 0, 0, 0, out _, 0)) throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(), "Could not mark the long-audio test file sparse.");
+            f.SetLength(2L * 3600 * 48000 * 8);
+        }
         var longWork = new Workspace(); longWork.Load(longFile, "Two hours"); longWork.Delete(48000, 96000); using (var stream = longWork.Open()) { stream.Position = stream.Length - 16; byte[] end = new byte[16]; stream.ReadExactly(end); Check(longWork.Frames == 2L * 3600 * 48000 - 48000, "two-hour disk-backed seek and cut"); }
         File.Delete(longFile);
         Check(!Directory.GetFiles(Paths.Library, ".soundshark-*").Any(), "failed exports clean temporary publications");

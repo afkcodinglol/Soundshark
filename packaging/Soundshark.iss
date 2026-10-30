@@ -1,5 +1,5 @@
 #define AppName "Soundshark"
-#define AppVersion "1.9.1"
+#define AppVersion "1.9.2"
 [Setup]
 AppId={{5FDE8A51-809E-4747-AF34-A235723DB4BF}
 AppName={#AppName}

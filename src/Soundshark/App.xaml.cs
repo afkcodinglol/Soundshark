@@ -6,6 +6,7 @@ public partial class App : Application
     Mutex? instance;
     protected override void OnStartup(StartupEventArgs e)
     {
+        SliderInput.Register();
         if (Environment.GetEnvironmentVariable("SOUNDSHARK_TEST_ROOT") == null)
         {
             instance = new Mutex(true, "Local\\Soundshark-" + Environment.UserName, out bool first);

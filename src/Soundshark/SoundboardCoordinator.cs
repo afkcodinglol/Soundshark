@@ -85,26 +85,19 @@ public sealed class SoundboardCoordinator
             int rate = bridge.Rate;
             Status?.Invoke("Preparing sound and matching volume…");
             string clip = await SoundboardAudio.PrepareMicrophone(file, rate, settings, ct).ConfigureAwait(false);
-            string? prelude = settings.UseActivationSound ? await SoundboardAudio.PrepareMicrophone(settings.ActivationSoundPath, rate, settings, ct).ConfigureAwait(false) : null;
             string? monitor = settings.HearTransmittedSounds ? await SoundboardAudio.PrepareMicrophone(file, Workspace.Rate, settings, ct).ConfigureAwait(false) : null;
-            double preludeSeconds = prelude == null ? 0 : new FileInfo(prelude).Length / 8.0 / rate;
             sequence = Paths.NewPcm();
             await using (var output = File.Create(sequence)) {
-                if (prelude != null) { await using var input = File.OpenRead(prelude); await input.CopyToAsync(output, ct).ConfigureAwait(false); }
-                if (settings.RelativeMicrophoneDelayMs > 0) await output.WriteAsync(new byte[(long)rate * settings.RelativeMicrophoneDelayMs / 1000 * 8], ct).ConfigureAwait(false);
                 await using var clipInput = File.OpenRead(clip);
                 startSeconds = Math.Clamp(startSeconds, 0, Math.Max(0, clipInput.Length / 8.0 / rate - 1.0 / rate));
                 clipInput.Position = (long)(startSeconds * rate) * 8; await clipInput.CopyToAsync(output, ct).ConfigureAwait(false);
             }
-            await Task.Delay(settings.StartDelayMs, ct).ConfigureAwait(false);
             keys = await AutoKeyLease.Acquire(settings.ForSoundPtt(file), hotkey, ct, keyTransport).ConfigureAwait(false);
-            await Task.Delay(settings.AutoKeyLeadInMs, ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             long total = new FileInfo(sequence).Length / 8;
             bridge.Begin(total, (float)settings.VoiceVolume, (float)settings.TransmittedSoundVolume, settings.BlockVoiceDuringSounds);
             await using var stream = new FileStream(sequence, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true);
             var bytes = new byte[8192]; var samples = new float[bytes.Length / 4];
-            var timeline = new System.Diagnostics.Stopwatch();
             bool activated = false, monitorStarted = false;
             Exception? speakerError = null; speaker.Failed += ex => speakerError = ex;
             while (bridge.Consumed < total) {
@@ -113,16 +106,16 @@ public sealed class SoundboardCoordinator
                 if (!bridge.Alive || bridge.Rate != rate) throw new SoundboardException("The microphone audio connection changed. Playback stopped; choose the device again in Settings.");
                 if (speakerError != null) throw speakerError;
                 bridge.Heartbeat();
-                PositionSeconds = startSeconds + Math.Max(0, bridge.Consumed / (double)rate - preludeSeconds - Math.Max(0, settings.RelativeMicrophoneDelayMs) / 1000.0);
+                PositionSeconds = startSeconds + bridge.Consumed / (double)rate;
                 if(paused && keys!=null) {await keys.DisposeAsync().ConfigureAwait(false);keys=null;}
-                else if(!paused && keys==null) {keys=await AutoKeyLease.Acquire(settings.ForSoundPtt(file),hotkey,ct,keyTransport).ConfigureAwait(false);await Task.Delay(settings.AutoKeyLeadInMs,ct).ConfigureAwait(false);}
-                bridge.Pause(paused); speaker.SetPaused(paused); speaker.SetVolume(MonitorVolume()); if (paused) timeline.Stop(); else if (activated) timeline.Start();
+                else if(!paused && keys==null) keys=await AutoKeyLease.Acquire(settings.ForSoundPtt(file),hotkey,ct,keyTransport).ConfigureAwait(false);
+                bridge.Pause(paused); speaker.SetPaused(paused); speaker.SetVolume(MonitorVolume());
                 while (!paused && bridge.Written - bridge.Consumed < Math.Min(rate / 5, NativeAudioBridge.Capacity / 2) && stream.Position < stream.Length) {
                     int read = await stream.ReadAsync(bytes, ct).ConfigureAwait(false); if (read == 0 || read % 8 != 0) throw new IOException("Incomplete soundboard PCM buffer.");
                     Buffer.BlockCopy(bytes, 0, samples, 0, read); bridge.Write(samples, read / 4);
                 }
-                if (!activated && (bridge.Written >= Math.Min(total, Math.Min(rate / 10, NativeAudioBridge.Capacity / 4)))) { bridge.Activate(); Started?.Invoke(file); activated = true; timeline.Start(); Status?.Invoke("Playing Through Mic · " + Path.GetFileNameWithoutExtension(file)); }
-                if (activated && !paused && monitor != null && !monitorStarted && timeline.Elapsed.TotalMilliseconds >= preludeSeconds * 1000 + Math.Max(0, -settings.RelativeMicrophoneDelayMs)) {
+                if (!activated && (bridge.Written >= Math.Min(total, Math.Min(rate / 10, NativeAudioBridge.Capacity / 4)))) { bridge.Activate(); Started?.Invoke(file); activated = true; Status?.Invoke("Playing Through Mic · " + Path.GetFileNameWithoutExtension(file)); }
+                if (activated && !paused && monitor != null && !monitorStarted) {
                     var workspace = new Workspace(); workspace.Load(monitor, "Monitor", false);
                     speaker.Play(workspace, Math.Min(workspace.Frames - 1, (long)(startSeconds * Workspace.Rate)), workspace.Frames, false, endpointId: settings.MonitorEndpointId, volume: MonitorVolume()); monitorStarted = true;
                 }
@@ -131,12 +124,10 @@ public sealed class SoundboardCoordinator
             }
             bridge.Stop();
             if (monitor != null && !monitorStarted) {
-                await Task.Delay((int)Math.Max(0, preludeSeconds * 1000 + Math.Max(0, -settings.RelativeMicrophoneDelayMs) - timeline.Elapsed.TotalMilliseconds), ct).ConfigureAwait(false);
                 var workspace = new Workspace(); workspace.Load(monitor, "Monitor", false);
                 speaker.Play(workspace, Math.Min(workspace.Frames - 1, (long)(startSeconds * Workspace.Rate)), workspace.Frames, false, endpointId: settings.MonitorEndpointId, volume: MonitorVolume());
             }
             while (speaker.Active) { ct.ThrowIfCancellationRequested(); await Task.Delay(10, ct).ConfigureAwait(false); }
-            await Task.Delay(settings.AutoKeyReleaseDelayMs, ct).ConfigureAwait(false);
         } finally {
             bridge?.Stop(); speaker.Stop();
             if (keys != null) await keys.DisposeAsync().ConfigureAwait(false);
@@ -150,16 +141,11 @@ public sealed class SoundboardCoordinator
         if (!settings.UsesContinuousVirtualMic || virtualMixer() is not { Connected: true } mixer) throw new SoundboardException("Enable Soundshark Virtual Mic in Soundboard Settings and connect its saved devices first.");
         const int rate = VirtualClipMixer.Rate;
         string clip = await SoundboardAudio.PrepareMicrophone(file, rate, settings, ct).ConfigureAwait(false);
-        string? prelude = settings.UseActivationSound ? await SoundboardAudio.PrepareMicrophone(settings.ActivationSoundPath, rate, settings, ct).ConfigureAwait(false) : null;
         string? monitor = settings.HearTransmittedSounds ? clip : null;
-        long preludeFrames = prelude == null ? 0 : new FileInfo(prelude).Length / 8;
-        long delayFrames = (long)rate * Math.Max(0, settings.RelativeMicrophoneDelayMs) / 1000;
         string sequence = Paths.NewPcm(); long lease = 0; AutoKeyLease? keys = null;
         using var speaker = new Playback();
         try {
             await using (var output = File.Create(sequence)) {
-                if (prelude != null) { await using var source = File.OpenRead(prelude); await source.CopyToAsync(output, ct).ConfigureAwait(false); }
-                if (delayFrames > 0) await output.WriteAsync(new byte[delayFrames * 8], ct).ConfigureAwait(false);
                 await using var sourceClip = File.OpenRead(clip);
                 startSeconds = Math.Clamp(startSeconds, 0, Math.Max(0, sourceClip.Length / 8.0 / rate - 1.0 / rate));
                 sourceClip.Position = (long)(startSeconds * rate) * 8; await sourceClip.CopyToAsync(output, ct).ConfigureAwait(false);
@@ -168,11 +154,10 @@ public sealed class SoundboardCoordinator
                 using var devices = new MMDeviceEnumerator(); using var destination = string.IsNullOrEmpty(settings.MonitorEndpointId) ? devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia) : devices.GetDevice(settings.MonitorEndpointId);
                 if (destination.ID == settings.TransmissionEndpointId) throw new SoundboardException("Choose headphones or speakers for clip monitoring, not CABLE Input.");
             }
-            await Task.Delay(settings.StartDelayMs, ct).ConfigureAwait(false);
             keys = await AutoKeyLease.Acquire(settings.ForSoundPtt(file), hotkey, ct, keyTransport).ConfigureAwait(false);
-            await Task.Delay(settings.AutoKeyLeadInMs, ct).ConfigureAwait(false); ct.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
             long total = new FileInfo(sequence).Length / 8;
-            lease = mixer.Begin(total, (float)settings.VoiceVolume, (float)settings.TransmittedSoundVolume, settings.BlockVoiceDuringSounds, preludeFrames, preludeFrames + delayFrames);
+            lease = mixer.Begin(total, (float)settings.VoiceVolume, (float)settings.TransmittedSoundVolume, settings.BlockVoiceDuringSounds, 0, 0);
             await using var stream = new FileStream(sequence, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, true);
             var bytes = new byte[8192]; var samples = new float[2048]; int pending = 0, sent = 0;
             bool activated = false, monitorStarted = false;
@@ -182,7 +167,7 @@ public sealed class SoundboardCoordinator
                 if (!mixer.Connected || mixer.Failure != null) throw mixer.Failure ?? new SoundboardException("The virtual microphone disconnected. Voice will reconnect only to its saved devices.");
                 if (monitorError != null) throw monitorError;
                 if (paused && keys != null) { await keys.DisposeAsync().ConfigureAwait(false); keys = null; }
-                else if (!paused && keys == null) { keys = await AutoKeyLease.Acquire(settings.ForSoundPtt(file), hotkey, ct, keyTransport).ConfigureAwait(false); await Task.Delay(settings.AutoKeyLeadInMs, ct).ConfigureAwait(false); }
+                else if (!paused && keys == null) keys = await AutoKeyLease.Acquire(settings.ForSoundPtt(file), hotkey, ct, keyTransport).ConfigureAwait(false);
                 mixer.Pause(lease, paused); speaker.SetPaused(paused); speaker.SetVolume(Math.Min(1, speakerGain) * (float)settings.TransmittedSoundVolume);
                 if (!paused) {
                     if (pending == sent && stream.Position < stream.Length) {
@@ -193,9 +178,8 @@ public sealed class SoundboardCoordinator
                     if (pending > sent) sent += mixer.Write(lease, samples.AsSpan(sent, pending - sent)) * 2;
                 }
                 if (!activated && mixer.Written >= Math.Min(total, rate / 10)) { mixer.Activate(lease); activated = true; Started?.Invoke(file); Status?.Invoke("Playing Through Soundshark Virtual Mic: " + Path.GetFileNameWithoutExtension(file)); }
-                double timeline = mixer.Consumed * 1000.0 / rate;
-                PositionSeconds = startSeconds + Math.Max(0, (mixer.Consumed - preludeFrames - delayFrames) / (double)rate);
-                if (activated && !paused && !monitorStarted && monitor != null && timeline >= preludeFrames * 1000.0 / rate + Math.Max(0, -settings.RelativeMicrophoneDelayMs)) {
+                PositionSeconds = startSeconds + mixer.Consumed / (double)rate;
+                if (activated && !paused && !monitorStarted && monitor != null) {
                     var workspace = new Workspace(); workspace.Load(monitor, "Clip monitor", false);
                     speaker.Play(workspace, Math.Min(workspace.Frames - 1, (long)(startSeconds * rate)), workspace.Frames, false, endpointId: settings.MonitorEndpointId, volume: Math.Min(1, speakerGain) * (float)settings.TransmittedSoundVolume); monitorStarted = true;
                 }
@@ -203,13 +187,10 @@ public sealed class SoundboardCoordinator
             }
             mixer.StopClip(lease);
             if (monitor != null && !monitorStarted) {
-                double due = preludeFrames * 1000.0 / rate + Math.Max(0, -settings.RelativeMicrophoneDelayMs);
-                await Task.Delay((int)Math.Max(0, due - total * 1000.0 / rate), ct).ConfigureAwait(false);
                 var workspace = new Workspace(); workspace.Load(monitor, "Clip monitor", false);
                 speaker.Play(workspace, Math.Min(workspace.Frames - 1, (long)(startSeconds * rate)), workspace.Frames, false, endpointId: settings.MonitorEndpointId, volume: Math.Min(1, speakerGain) * (float)settings.TransmittedSoundVolume);
             }
             while (speaker.Active) { ct.ThrowIfCancellationRequested(); speaker.SetPaused(paused); await Task.Delay(10, ct).ConfigureAwait(false); }
-            await Task.Delay(settings.AutoKeyReleaseDelayMs, ct).ConfigureAwait(false);
         } finally {
             if (lease != 0) mixer.StopClip(lease); speaker.Stop();
             if (keys != null) await keys.DisposeAsync().ConfigureAwait(false);

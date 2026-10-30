@@ -3,10 +3,11 @@ import { createAuthHandler } from './auth.mjs';
 import { createAdminHandler } from './admin.mjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const countryCodes = new Set('AD,AE,AF,AG,AI,AL,AM,AO,AQ,AR,AS,AT,AU,AW,AX,AZ,BA,BB,BD,BE,BF,BG,BH,BI,BJ,BL,BM,BN,BO,BQ,BR,BS,BT,BV,BW,BY,BZ,CA,CC,CD,CF,CG,CH,CI,CK,CL,CM,CN,CO,CR,CU,CV,CW,CX,CY,CZ,DE,DJ,DK,DM,DO,DZ,EC,EE,EG,EH,ER,ES,ET,EU,FI,FJ,FK,FM,FO,FR,GA,GB,GB-ENG,GB-NIR,GB-SCT,GB-WLS,GD,GE,GF,GG,GH,GI,GL,GM,GN,GP,GQ,GR,GS,GT,GU,GW,GY,HK,HM,HN,HR,HT,HU,ID,IE,IL,IM,IN,IO,IQ,IR,IS,IT,JE,JM,JO,JP,KE,KG,KH,KI,KM,KN,KP,KR,KW,KY,KZ,LA,LB,LC,LI,LK,LR,LS,LT,LU,LV,LY,MA,MC,MD,ME,MF,MG,MH,MK,ML,MM,MN,MO,MP,MQ,MR,MS,MT,MU,MV,MW,MX,MY,MZ,NA,NC,NE,NF,NG,NI,NL,NO,NP,NR,NU,NZ,OM,PA,PE,PF,PG,PH,PK,PL,PM,PN,PR,PS,PT,PW,PY,QA,RE,RO,RS,RU,RW,SA,SB,SC,SD,SE,SG,SH,SI,SJ,SK,SL,SM,SN,SO,SR,SS,ST,SV,SX,SY,SZ,TC,TD,TF,TG,TH,TJ,TK,TL,TM,TN,TO,TR,TT,TV,TW,TZ,UA,UG,UM,US,UY,UZ,VA,VC,VE,VG,VI,VN,VU,WF,WS,XK,YE,YT,ZA,ZM,ZW'.split(','));
 class HubError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type':'application/json', 'cache-control':'no-store', 'x-content-type-options':'nosniff' } });
-const sound = (row, owners = []) => ({ id:row.id, title:row.title, uploader:row.uploader, duration:row.duration, bytes:row.bytes, sha256:row.sha256, ownerId:row.owner_id, uploaderIsOwner:owners.includes(row.owner_id) });
-const fields = 'id,owner_id,title,uploader,duration,bytes,sha256,object_path,status';
+const sound = (row, owners = []) => ({ id:row.id, title:row.title, uploader:row.uploader, duration:row.duration, bytes:row.bytes, sha256:row.sha256, ownerId:row.owner_id, uploaderIsOwner:owners.includes(row.owner_id), countryCode:row.country_code || null });
+const fields = 'id,owner_id,title,uploader,duration,bytes,sha256,object_path,status,country_code';
 
 async function boundedBody(request, maximum) {
   const reader = request.body?.getReader(); if (!reader) throw new HubError(400,'Missing audio');
@@ -27,6 +28,11 @@ export function createHandler(config, fetcher = fetch) {
     return response;
   }
   async function rows(query) { return (await api('/rest/v1/hub_sounds?select='+fields+'&'+query)).json(); }
+  async function countryPreference(id) {
+    const query = new URLSearchParams({select:'country_code,show_country',user_id:'eq.'+id,limit:'1'});
+    const values = await (await api('/rest/v1/hub_profiles?'+query)).json();
+    return values[0] || {country_code:null,show_country:false};
+  }
   const accountAuth = createAuthHandler(config, fetcher, async (name, body) => {
     const response = await api('/rest/v1/rpc/'+name,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     return response.json();
@@ -47,6 +53,19 @@ export function createHandler(config, fetcher = fetch) {
       const route = marker < 0 ? '' : url.pathname.slice(marker+prefix.length);
       if (route === '/account' || route === '/issues' || route.startsWith('/admin/')) return await administration(route, request, url);
       if (request.method === 'POST' && route.startsWith('/auth/')) return await accountAuth(route, request, await boundedBody(request,4096));
+      if (route === '/profile') {
+        const account = await user(request);
+        if (request.method === 'GET') {
+          const preference = await countryPreference(account.id); return json({countryCode:preference.country_code,showCountry:preference.show_country===true});
+        }
+        if (request.method === 'PUT') {
+          let value; try { value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await boundedBody(request,1024))); } catch { throw new HubError(400,'Invalid country preference'); }
+          const code=String(value.countryCode||'').toUpperCase();
+          if (!countryCodes.has(code) || typeof value.showCountry!=='boolean') throw new HubError(400,'Invalid country preference');
+          await api('/rest/v1/rpc/hub_set_country_preference',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({p_user_id:account.id,p_country_code:code,p_show_country:value.showCountry})});
+          return json({countryCode:code,showCountry:value.showCountry});
+        }
+      }
       if (request.method === 'GET' && route === '/sounds') {
         const q = (url.searchParams.get('q') || '').trim(); const page = Number(url.searchParams.get('page') || 0);
         if (q.length > 80 || !Number.isInteger(page) || page < 0 || page > 250) throw new HubError(400,'Invalid search');
@@ -97,12 +116,13 @@ export function createHandler(config, fetcher = fetch) {
         const bytes = new Uint8Array(await file.arrayBuffer()); let info;
         try { info = inspectMp3(bytes); } catch { throw new HubError(400,'Upload valid MP3 audio up to 60 seconds'); }
         const ownerAccount = await isOwner(uploader.id);
+        const preference = await countryPreference(uploader.id);
         const reserved = ownerAccount ? null : await api('/rest/v1/rpc/hub_reserve_upload',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({p_user_id:uploader.id,p_bytes:bytes.length})});
         if (reserved && !await reserved.json()) throw new HubError(429,'Upload quota reached');
         const id = crypto.randomUUID(), objectPath = uploader.id+'/'+id+'.mp3';
         const sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
         const display = String(uploader.user_metadata?.display_name || 'Soundshark user').replace(/[\x00-\x1f]/g,'').trim().slice(0,40) || 'Soundshark user';
-        const row = {id,owner_id:uploader.id,title,uploader:display,duration:info.duration,bytes:bytes.length,sha256,object_path:objectPath};
+        const row = {id,owner_id:uploader.id,title,uploader:display,duration:info.duration,bytes:bytes.length,sha256,object_path:objectPath,country_code:preference.show_country?preference.country_code:null};
         await api('/storage/v1/object/hub-audio/'+objectPath,{method:'POST',headers:{'content-type':'audio/mpeg','x-upsert':'false'},body:bytes});
         try { await api('/rest/v1/hub_sounds',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(row)}); }
         catch(error) { try { await api('/storage/v1/object/hub-audio',{method:'DELETE',headers:{'content-type':'application/json'},body:JSON.stringify({prefixes:[objectPath]})}); } catch { console.error('Hub upload cleanup required',id); } throw error; }

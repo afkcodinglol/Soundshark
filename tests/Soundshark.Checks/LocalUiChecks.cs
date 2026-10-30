@@ -23,6 +23,11 @@ internal static partial class Program
         Check(Descendants<Button>(main).Single(b=>b.Name=="AdminToolsButton").Visibility==Visibility.Collapsed,"Admin Tools is hidden without server Owner authorization");
         var settings=new UiSettingsWindow(main){ShowActivated=false};settings.Show();await Task.Delay(60);
         Check(Descendants<Button>(settings).Any(b=>Equals(b.Content,"Custom Font"))&&!Descendants<ComboBox>(settings).Any(c=>c.Items.Contains("Light")),"font import is beside chooser and obsolete appearance dropdown is removed");
+        var textSize=Descendants<Slider>(settings).Single();
+        Check(textSize.IsMoveToPointEnabled&&SliderInput.ValueAt(textSize,new Point(75,0),100,20,Orientation.Horizontal,false)==17,"sliders jump to the pressed position and support continuous track dragging");
+        settings.UpdateLayout();
+        var settingsScroll=Descendants<ScrollBar>(settings).First(s=>s.Orientation==Orientation.Vertical);settingsScroll.ApplyTemplate();settingsScroll.UpdateLayout();
+        Check(settingsScroll.Width>=20&&Descendants<Thumb>(settingsScroll).Any(t=>t.MinHeight>=48),"scrollbars have a wide track and a large easy-to-grab thumb");
         Snapshot(settings,"custom-font-settings.png");settings.Close();
         string fontPath=Path.GetFullPath("assets/Fonts/Lato-Regular.ttf");
         if(!File.Exists(fontPath))fontPath=Directory.GetFiles(Path.GetFullPath("assets/Fonts"),"*.ttf").First();

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using Microsoft.Win32;
 using Soundshark.Core;
@@ -18,10 +19,11 @@ public sealed class SoundsHubWindow : Window
     readonly CheckBox mine = new() { Content = "My uploads" };
     readonly ListBox sounds = new() { Name = "HubSounds", HorizontalContentAlignment = HorizontalAlignment.Stretch };
     readonly TextBlock status = Ui.Text("", 13, true), account = Ui.Text("Browse community sounds", 13, true), pageLabel = Ui.Text("Page 1", 13, true);
-    readonly Button preview, download, upload, delete, report, previous, next, signIn, stop, cancel;
+    readonly Button preview, download, upload, delete, report, previous, next, signIn, flag, stop, cancel;
+    readonly ToggleButton viewSwitch;
     readonly List<Button> actions = [];
     CancellationTokenSource? operation;
-    bool busy, closed, hasMore;
+    bool busy, closed, hasMore, savingView;
     int page;
     public Task Pending { get; private set; } = Task.CompletedTask;
     public SoundsHubWindow(MainWindow owner, SoundsHubClient? service = null)
@@ -35,22 +37,21 @@ public sealed class SoundsHubWindow : Window
         foreach (var height in new[] { GridLength.Auto, GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto, GridLength.Auto }) root.RowDefinitions.Add(new() { Height = height });
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 14) };
         signIn = Ui.Button("Sign In / Create Account", () => _ = Account()); DockPanel.SetDock(signIn, Dock.Right); heading.Children.Add(signIn);
+        flag = Ui.Button("Flag Selector", () => _ = CountryFlag()); flag.Margin = new Thickness(0,0,10,0); DockPanel.SetDock(flag, Dock.Right); heading.Children.Add(flag);
         var title = new StackPanel(); title.Children.Add(Ui.Text("Sounds Hub", 28)); title.Children.Add(account); heading.Children.Add(title); root.Children.Add(heading);
         Button Action(string label, Action click) { var button = Ui.Button(label, click); actions.Add(button); return button; }
-        var toolbar = Ui.Row(search, Action("Search", () => { page = 0; _ = Refresh(); }), Action("Refresh Sounds", () => _ = Refresh()), mine);
+        viewSwitch = new ToggleButton { Name = "HubViewSwitch", IsChecked = main.Settings.HubGridView, ToolTip = "Switch between full-width rows and compact sound cards" };
+        viewSwitch.SetResourceReference(StyleProperty, "ViewModeSwitch");
+        System.Windows.Automation.AutomationProperties.SetName(viewSwitch, "Sounds Hub List or Grid View");
+        viewSwitch.Click += (_, _) => _ = SetHubGridView(viewSwitch.IsChecked == true);
+        var toolbar = Ui.Row(search, Action("Search", () => { page = 0; _ = Refresh(); }), Action("Refresh Sounds", () => _ = Refresh()), mine, viewSwitch);
         search.ToolTip = "Search sound titles"; System.Windows.Automation.AutomationProperties.SetName(search, "Search Sounds Hub");
         search.KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Enter && !busy) { page = 0; _ = Refresh(); } };
         mine.Click += (_, _) => { page = 0; _ = Refresh(); }; Grid.SetRow(toolbar, 1); root.Children.Add(toolbar);
         sounds.SetResourceReference(BackgroundProperty, "Surface"); sounds.BorderThickness = new Thickness(0);
         sounds.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
         sounds.SetValue(ScrollViewer.CanContentScrollProperty, true); VirtualizingPanel.SetIsVirtualizing(sounds, true); VirtualizingPanel.SetVirtualizationMode(sounds, VirtualizationMode.Recycling);
-        var text = new FrameworkElementFactory(typeof(StackPanel)); text.SetValue(MarginProperty, new Thickness(12, 9, 12, 9));
-        var name = new FrameworkElementFactory(typeof(TextBlock)); name.SetBinding(TextBlock.TextProperty, new Binding(nameof(HubSound.Title))); name.SetResourceReference(TextBlock.FontSizeProperty, "Font16"); name.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); name.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); text.AppendChild(name);
-        var detail = new FrameworkElementFactory(typeof(TextBlock)); detail.SetBinding(TextBlock.TextProperty, new Binding(nameof(HubSound.Detail))); detail.SetResourceReference(TextBlock.FontSizeProperty, "Font12"); detail.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); 
-        var crown = new FrameworkElementFactory(typeof(TextBlock)); crown.SetBinding(TextBlock.TextProperty,new Binding(nameof(HubSound.Crown))); crown.SetValue(TextBlock.ForegroundProperty,System.Windows.Media.Brushes.Gold); crown.SetValue(TextBlock.FontFamilyProperty,new System.Windows.Media.FontFamily("Segoe UI Emoji")); crown.SetValue(TextBlock.FontSizeProperty,20.0);
-        var attribution = new FrameworkElementFactory(typeof(StackPanel)); attribution.SetValue(StackPanel.OrientationProperty,Orientation.Horizontal);
-        attribution.AppendChild(crown); attribution.AppendChild(detail); text.AppendChild(attribution);
-        sounds.ItemTemplate = new DataTemplate { VisualTree = text }; sounds.SelectionChanged += (_, _) => UpdateActions(); Grid.SetRow(sounds, 2); root.Children.Add(sounds);
+        ConfigureHubView(); sounds.SelectionChanged += (_, _) => UpdateActions(); Grid.SetRow(sounds, 2); root.Children.Add(sounds);
         preview = Action("Preview", () => _ = Preview()); download = Action("Download To Library", () => _ = Download());
         upload = Action("Upload Sound", () => _ = Upload()); delete = Action("Remove My Upload", () => _ = Delete()); report = Action("Report Sound", () => _ = Report());
         upload.ToolTip = "Share audio up to 60 seconds and 10 MB. A copy is prepared as MP3; your original stays unchanged.";
@@ -62,6 +63,40 @@ public sealed class SoundsHubWindow : Window
         player.Failed += ex => Dispatcher.InvokeAsync(() => { if (!closed) ShowError("This sound could not be played. " + ex.Message); });
         Loaded += (_, _) => { if (client?.Session == null) { Close(); return; } _ = Refresh(); UpdateActions(); };
         Closing += (_, _) => { closed = true; lifetime.Cancel(); operation?.Cancel(); player.Dispose(); if (!busy && ownsClient) client?.Dispose(); };
+    }
+    DataTemplate HubSoundTemplate(bool grid)
+    {
+        var text = new FrameworkElementFactory(typeof(StackPanel)); text.SetValue(MarginProperty, grid ? new Thickness(14, 12, 14, 10) : new Thickness(12, 9, 12, 9));
+        var name = new FrameworkElementFactory(typeof(TextBlock)); name.SetBinding(TextBlock.TextProperty, new Binding(nameof(HubSound.Title))); name.SetResourceReference(TextBlock.FontSizeProperty, "Font16"); name.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold); name.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis); text.AppendChild(name);
+        var detail = new FrameworkElementFactory(typeof(TextBlock)); detail.SetBinding(TextBlock.TextProperty, new Binding(nameof(HubSound.Detail))); detail.SetResourceReference(TextBlock.FontSizeProperty, "Font12"); detail.SetResourceReference(TextBlock.ForegroundProperty, "Muted"); 
+        var countryFlag = new FrameworkElementFactory(typeof(Image)); countryFlag.SetBinding(Image.SourceProperty,new Binding(nameof(HubSound.CountryFlag))); countryFlag.SetBinding(VisibilityProperty,new Binding(nameof(HubSound.CountryFlagVisibility))); countryFlag.SetValue(FrameworkElement.WidthProperty,24.0); countryFlag.SetValue(FrameworkElement.HeightProperty,16.0); countryFlag.SetValue(Image.StretchProperty,System.Windows.Media.Stretch.Uniform); countryFlag.SetValue(FrameworkElement.MarginProperty,new Thickness(0,0,7,0));
+        var attribution = new FrameworkElementFactory(typeof(StackPanel)); attribution.SetValue(StackPanel.OrientationProperty,Orientation.Horizontal);
+        attribution.AppendChild(countryFlag); attribution.AppendChild(detail); text.AppendChild(attribution);
+        return new DataTemplate { VisualTree = text };
+    }
+    void ConfigureHubView()
+    {
+        bool grid = main.Settings.HubGridView;
+        viewSwitch.IsChecked = grid;
+        var panel = new FrameworkElementFactory(grid ? typeof(SoundTilePanel) : typeof(VirtualizingStackPanel));
+        if (grid) panel.SetValue(SoundTilePanel.TileSizeProperty, new Size(300, 96));
+        sounds.ItemsPanel = new ItemsPanelTemplate(panel);
+        VirtualizingPanel.SetScrollUnit(sounds, ScrollUnit.Pixel);
+        var cells = new Style(typeof(ListBoxItem), (Style)FindResource(typeof(ListBoxItem)));
+        cells.Setters.Add(new Setter(MarginProperty, grid ? new Thickness(0, 0, 8, 8) : new Thickness(0, 0, 0, 4)));
+        cells.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+        sounds.ItemContainerStyle = cells;
+        sounds.ItemTemplate = HubSoundTemplate(grid);
+        viewSwitch.ToolTip = grid ? "Grid view is active · switch to full-width rows" : "List view is active · switch to compact cards";
+    }
+    internal async Task SetHubGridView(bool grid)
+    {
+        if (savingView || main.Settings.HubGridView == grid) { viewSwitch.IsChecked = main.Settings.HubGridView; return; }
+        bool previous = main.Settings.HubGridView;
+        savingView = true; main.Settings.HubGridView = grid; ConfigureHubView(); UpdateActions();
+        try { await main.Settings.Save(); }
+        catch (Exception ex) { main.Settings.HubGridView = previous; ConfigureHubView(); ShowError("Could not save the Hub view. " + ex.Message); }
+        finally { savingView = false; UpdateActions(); }
     }
     static void Cleanup(string file)
     {
@@ -78,7 +113,7 @@ public sealed class SoundsHubWindow : Window
         delete.IsEnabled = ready && sound != null && (client?.IsOwner == true || client?.Session?.UserId == sound.OwnerId);
         delete.Content = client?.IsOwner == true ? "Remove Sound" : "Remove My Upload";
         report.IsEnabled = ready && sound != null && client?.Session != null;
-        signIn.IsEnabled = ready; search.IsEnabled = ready; mine.IsEnabled = ready && client?.Session != null;
+        signIn.IsEnabled = ready; flag.IsEnabled = ready && client?.Session != null; flag.Visibility = client?.Session == null ? Visibility.Collapsed : Visibility.Visible; search.IsEnabled = ready; mine.IsEnabled = ready && client?.Session != null; viewSwitch.IsEnabled = ready && !savingView;
         previous.IsEnabled = ready && page > 0; next.IsEnabled = ready && hasMore; cancel.IsEnabled = busy;
         signIn.Content = client?.Session == null ? "Sign In / Create Account" : "Sign Out";
         account.Text = client?.Session is { } user ? "Signed in as " + user.DisplayName : "Sign in to access Sounds Hub.";
@@ -189,6 +224,13 @@ public sealed class SoundsHubWindow : Window
         }
         Close();
     }
+    internal Task CountryFlag() => Run("Loading your flag preference...", async ct => {
+        var preference = await client!.CountryPreference(ct);
+        var dialog = new HubCountryWindow(this, preference) { ShowActivated = false };
+        if (dialog.ShowDialog() != true) { status.Text = "Country flag preference unchanged."; return; }
+        await client.SetCountryPreference(dialog.CountryCode, dialog.ShowCountry, ct);
+        await RefreshAfterMutation(dialog.ShowCountry ? "Country flag displayed beside your uploads." : "Country flag hidden from your uploads.", ct);
+    });
 }
 
 public static class HubImports

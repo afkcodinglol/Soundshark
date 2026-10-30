@@ -113,7 +113,7 @@ public sealed class TimelineStream : Stream
 
 public static class FileRules
 {
-    public static readonly string[] AudioExtensions = [".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus", ".aiff", ".aif"];
+    public static readonly string[] AudioExtensions = [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".wma", ".ac3", ".wv", ".aiff", ".aif"];
     public static string Filename(string name, string extension = ".mp3")
     {
         extension = extension.ToLowerInvariant();

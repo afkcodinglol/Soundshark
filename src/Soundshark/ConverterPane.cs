@@ -38,7 +38,7 @@ public sealed class ConverterPane : StackPanel
     void ApplyDiscordMode()
     {
         format.SelectedItem = main.Settings.Discord ? AudioOutputFormat.Mp3 : studioFormat;
-        formatHint.Text = main.Settings.Discord ? "Discord Soundboard is on · MP3 selected automatically · up to 5 seconds and 512,000 bytes" : "Choose MP3, WAV, FLAC, M4A, OGG, Opus, or AIFF. Audio settings are automatic.";
+        formatHint.Text = main.Settings.Discord ? "Discord Soundboard is on · MP3 selected automatically · up to 5 seconds and 512,000 bytes" : $"Choose from {AudioOutputFormat.All.Length} output formats. Audio settings are automatic.";
         UpdateControls();
     }
     void UpdateControls()

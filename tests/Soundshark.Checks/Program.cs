@@ -84,6 +84,8 @@ internal static partial class Program
                     Console.WriteLine($"URL IMPORT OK: {new FileInfo(pcm).Length / 8.0 / 48000:F3}s decoded stereo audio");
                 }
                 else if (args.Contains("--soundboard-config")) SoundboardConfigChecks();
+                else if (args.Contains("--conversion")) await ConversionChecks();
+                else if (args.Contains("--conversion-safety")) await SafetyChecks();
                 else { ClipperChecks(); SoundboardConfigChecks(); await LoggingChecks(); await ShutdownChecks(); await MouseShortcutChecks(); await Checks(); await ConversionChecks(); await SafetyChecks(); await PcVolumeChecks(); await SoundboardChecks(); await AutoKeyChecks(); await AppUpdateChecks(); await RollbackChecks(); await ToolProgressChecks(); await Render(); Console.WriteLine($"{passed} checks passed"); }
                 code = 0;
             }
@@ -181,7 +183,7 @@ internal static partial class Program
     static async Task LiveSoundboardChecks(bool matched = false, double level = 1)
     {
         var saved = System.Text.Json.JsonSerializer.Deserialize<Settings>(await File.ReadAllTextAsync(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Soundshark", "settings.json")))!;
-        var config = (saved.Soundboard with { BlockVoiceDuringSounds = true, HearTransmittedSounds = matched && saved.Soundboard.HearTransmittedSounds, AutoKeysEnabled = false, RepeatSounds = false, StartDelayMs = 0, AutoKeyLeadInMs = 0, AutoKeyReleaseDelayMs = 0, UseActivationSound = false, RelativeMicrophoneDelayMs = 0, VoiceVolume = 1, TransmittedSoundVolume = level }).ForSoundOutput();
+        var config = (saved.Soundboard with { BlockVoiceDuringSounds = true, HearTransmittedSounds = matched && saved.Soundboard.HearTransmittedSounds, AutoKeysEnabled = false, RepeatSounds = false, VoiceVolume = 1, TransmittedSoundVolume = level }).ForSoundOutput();
         using var enumerator = new NAudio.CoreAudioApi.MMDeviceEnumerator(); using var device = enumerator.GetDevice(config.MicrophoneEndpointId);
         Console.WriteLine("LIVE ENDPOINT " + device.FriendlyName + " " + device.ID);
         string source = Path.Combine(output, "transmitted-test-tone.wav"), recording = Path.Combine(output, "microphone-received-test.wav");
@@ -247,7 +249,7 @@ internal static partial class Program
     static async Task LiveLibraryFile(string file)
     {
         var saved = System.Text.Json.JsonSerializer.Deserialize<Settings>(await File.ReadAllTextAsync(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Soundshark", "settings.json")))!;
-        var config = saved.Soundboard with { BlockVoiceDuringSounds = true, AutoKeysEnabled = false, RepeatSounds = false, UseActivationSound = false, StartDelayMs = 0, RelativeMicrophoneDelayMs = 0 };
+        var config = saved.Soundboard with { BlockVoiceDuringSounds = true, AutoKeysEnabled = false, RepeatSounds = false };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25)); var ct = timeout.Token;
         string prepared = await SoundboardAudio.PrepareMicrophone(file, 48000, config, ct);
         string stem = Path.GetFileNameWithoutExtension(file);
@@ -338,13 +340,11 @@ internal static partial class Program
         catch (ArgumentException) { Check(true, "special and per-sound shortcuts cannot share the same gesture"); }
         try { (config with { TargetLufs = double.NaN }).Validate(); throw new Exception("invalid gain accepted"); }
         catch (ArgumentException) { Check(true, "nonfinite loudness settings are rejected"); }
-        try { (config with { StartDelayMs = 5001 }).Validate(); throw new Exception("invalid delay accepted"); }
-        catch (ArgumentException) { Check(true, "startup delays are bounded before playback scheduling"); }
         try { (config with { Bindings = [sound], AutoKeys = [new() { Enabled = true, Chord = sound.Chord }] }).Validate(); throw new Exception("self trigger accepted"); }
         catch (ArgumentException) { Check(true, "automatic keys cannot trigger their own soundboard binding"); }
-        string json = System.Text.Json.JsonSerializer.Serialize(config with { Bindings = [sound], TargetLufs = -23, RelativeMicrophoneDelayMs = -150 });
+        string json = System.Text.Json.JsonSerializer.Serialize(config with { Bindings = [sound], TargetLufs = -23 });
         var restored = System.Text.Json.JsonSerializer.Deserialize<SoundboardConfiguration>(json)!; restored.Validate();
-        Check(restored.Bindings.Single().SoundFilename == "Hello.mp3" && restored.RelativeMicrophoneDelayMs == -150, "typed soundboard configuration round-trips without losing bindings or signed timing");
+        Check(restored.Bindings.Single().SoundFilename == "Hello.mp3" && restored.TargetLufs == -23, "typed soundboard configuration round-trips without losing bindings or legacy gain data");
     }
     static async Task SoundboardChecks()
     {
@@ -629,9 +629,8 @@ internal static partial class Program
     }
     static async Task ConversionChecks()
     {
-        string raw = Directory.GetFiles(Paths.Cache, "*.pcm").First();
         string source = Path.Combine(Paths.Cache, "Original 音楽.wav");
-        await MediaTools.Run(Paths.Tool("ffmpeg"), ["-nostdin", "-v", "error", "-f", "f32le", "-ar", "48000", "-ac", "2", "-i", raw, "-t", "4", "-c:a", "pcm_s24le", source], CancellationToken.None);
+        await MediaTools.Run(Paths.Tool("ffmpeg"), ["-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=997:duration=4:sample_rate=48000", "-ac", "2", "-c:a", "pcm_s24le", source], CancellationToken.None);
         byte[] original = await File.ReadAllBytesAsync(source);
         foreach (var format in AudioOutputFormat.All)
         {
@@ -644,7 +643,9 @@ internal static partial class Program
             Check(AudioConversion.IsLibraryAudio(path), $"Library recognizes {format.Label} output");
         }
         Check((await File.ReadAllBytesAsync(source)).SequenceEqual(original), "conversion leaves source bytes unchanged");
-        string mp3 = Path.Combine(Paths.Library, "quality-128.mp3"), remuxed = AudioConversion.NewDestination(mp3, AudioOutputFormat.Mp3);
+        string mp3 = Path.Combine(Paths.Library, "quality-128.mp3");
+        if (!File.Exists(mp3)) await MediaTools.Run(Paths.Tool("ffmpeg"), ["-nostdin", "-v", "error", "-i", source, "-c:a", "libmp3lame", "-b:a", "128k", mp3], CancellationToken.None);
+        string remuxed = AudioConversion.NewDestination(mp3, AudioOutputFormat.Mp3);
         await AudioConversion.Convert(mp3, remuxed, AudioOutputFormat.Mp3, true, CancellationToken.None);
         string details = await MediaTools.Run(Paths.Tool("ffprobe"), ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=bit_rate", "-of", "default=nw=1:nk=1", remuxed], CancellationToken.None);
         Check(details.Trim() == "128000", "existing low-bitrate MP3 stays at source bitrate without re-encoding");
@@ -786,6 +787,7 @@ internal static partial class Program
         window.Studio.SelectAll();
         tabControl.SelectedIndex = 2; await Task.Delay(100);
         var formats = Descendants<System.Windows.Controls.ComboBox>(window).Single(x => x.Name == "OutputFormat");
+        Check(new[]{"AAC","M4A (Apple Lossless)","WMA","AC-3","WebM (Opus)","WavPack"}.All(label=>AudioOutputFormat.All.Any(format=>format.Label==label))&&formats.Items.Count==13,"Converter exposes six additional verified output formats");
         Check(!Descendants<System.Windows.Controls.ComboBox>(window).Any(x => x.Name == "QualitySelector"), "Converter has format selection and no quality controls");
         var wavFormat = AudioOutputFormat.All.Single(x => x.Extension == ".wav"); formats.SelectedItem = wavFormat;
         var discordToggle = window.DiscordToggle;

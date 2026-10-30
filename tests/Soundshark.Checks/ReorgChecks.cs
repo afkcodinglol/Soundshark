@@ -49,7 +49,11 @@ internal static partial class Program
         Check(Settings.Load().Appearance.NewestFirst&&!Settings.Load().Appearance.CompactLibrary&&Settings.Load().Appearance.ShowFileDetails,"grouped Library layout toggles save their preferences with file details always shown");Snapshot(main,"library-reorganized.png");
         var soundSettings=new SoundboardSettingsWindow(main){ShowActivated=false};soundSettings.Show();await Task.Delay(70);
         var configTabs=Descendants<TabControl>(soundSettings).Single();
-        Check(configTabs.Items.Cast<TabItem>().Select(t=>t.Header.ToString()).SequenceEqual(new[]{"Audio","Hotkeys","Advanced"}),"Microphone EQ and Auto Keys tabs are removed");
+        Check(configTabs.Items.Cast<TabItem>().Select(t=>t.Header.ToString()).SequenceEqual(new[]{"General","Hotkeys"}),"General and Hotkeys are the only soundboard settings tabs");
+        var generalText=Descendants<TextBlock>(soundSettings).Select(t=>t.Text).ToArray();
+        Check(generalText.Contains("Playback behavior")&&Descendants<CheckBox>(soundSettings).Any(c=>Equals(c.Content,"Repeat Sounds Until Stopped"))&&Descendants<CheckBox>(soundSettings).Any(c=>Equals(c.Content,"Always Stop Hotkey Sounds At Their End")),"General includes both playback behavior options");
+        Check(!generalText.Any(t=>t.Contains("Playback Timing")||t.Contains("Start Delay")||t.Contains("Mic Vs Speaker Offset")||t.Contains("Push-To-Talk Lead-In")||t.Contains("Push-To-Talk Release Delay"))&&!Descendants<CheckBox>(soundSettings).Any(c=>Equals(c.Content,"Play An Activation Sound Before The Clip")),"removed playback timing and activation sound options stay absent");
+        Snapshot(soundSettings,"soundboard-general-polished.png");
         configTabs.SelectedIndex=1;await Task.Delay(50);
         Check(!Descendants<CheckBox>(soundSettings).Any() && Descendants<TextBlock>(soundSettings).Any(t=>t.Text=="Playback Controls"),"Hotkeys tab contains playback controls and no preference toggles");Snapshot(soundSettings,"playback-hotkeys.png");soundSettings.Close();
         var shortcut=new SoundShortcutWindow(main,first){ShowActivated=false};shortcut.Show();await Task.Delay(80);

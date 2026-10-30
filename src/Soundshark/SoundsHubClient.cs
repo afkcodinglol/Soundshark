@@ -34,19 +34,29 @@ public sealed record SoundsHubSource(string Url, string PublishableKey)
     }
 }
 
-public sealed record HubSound(Guid Id, string Title, string Uploader, double Duration, long Bytes, string Sha256, Guid OwnerId, bool UploaderIsOwner = false)
+public sealed record HubSound(Guid Id, string Title, string Uploader, double Duration, long Bytes, string Sha256, Guid OwnerId, bool UploaderIsOwner = false, string? CountryCode = null)
 {
-    public string Crown => UploaderIsOwner ? "👑 " : "";
     public string Detail => $"{Uploader}  /  {Duration:F1}s  /  {Bytes / 1000.0:F0} KB";
+    [JsonIgnore] public System.Windows.Media.ImageSource? CountryFlag => CountryCode == null ? null : HubCountries.Flag(CountryCode);
+    [JsonIgnore] public System.Windows.Visibility CountryFlagVisibility => CountryCode == null ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
     public void Validate()
     {
         if (Id == Guid.Empty || OwnerId == Guid.Empty || string.IsNullOrWhiteSpace(Title) || Title.Length > 80 ||
             string.IsNullOrWhiteSpace(Uploader) || Uploader.Length > 40 || !double.IsFinite(Duration) || Duration is <= 0 or > 60.1 ||
-            Bytes is <= 0 or > SoundsHubClient.MaxAudioBytes || Sha256 == null || Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit))
+            Bytes is <= 0 or > SoundsHubClient.MaxAudioBytes || Sha256 == null || Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit) ||
+            CountryCode != null && !HubCountries.Supports(CountryCode))
             throw new InvalidDataException("Sounds Hub returned invalid sound details.");
     }
 }
 public sealed record HubPage(HubSound[] Sounds, bool HasMore);
+public sealed record HubCountryPreference(string? CountryCode, bool ShowCountry)
+{
+    public void Validate()
+    {
+        if (ShowCountry && !HubCountries.Supports(CountryCode)) throw new InvalidDataException("Choose a supported country or region before displaying its flag.");
+        if (CountryCode != null && !HubCountries.Supports(CountryCode)) throw new InvalidDataException("Choose a supported country or region.");
+    }
+}
 public sealed record HubSession(string AccessToken, string RefreshToken, Guid UserId, string DisplayName, long ExpiresAt);
 public sealed record HubRememberedSession(HubSession Session, long RememberUntil);
 public sealed record HubRecovery(Guid ChallengeId);
@@ -144,6 +154,8 @@ public sealed class SoundsHubClient : IDisposable
             if (response.StatusCode == HttpStatusCode.Unauthorized && request.Headers.Authorization != null) SaveSession(null);
             if (response.StatusCode == HttpStatusCode.NotFound && request.RequestUri!.AbsolutePath.StartsWith("/functions/v1/sounds-hub/auth/", StringComparison.Ordinal))
                 throw new InvalidDataException("Username sign-in and password recovery are not available on this Hub service yet. Email sign-in is available.");
+            if (response.StatusCode == HttpStatusCode.NotFound && request.RequestUri!.AbsolutePath.EndsWith("/profile", StringComparison.Ordinal))
+                throw new HttpRequestException("Country flags need the updated Hub service deployed first.", null, HttpStatusCode.NotFound);
             await EnsureSuccess(response, ct);
             return JsonDocument.Parse(await ReadBounded(await response.Content.ReadAsStreamAsync(ct), 1024 * 1024, ct));
         }
@@ -175,6 +187,7 @@ public sealed class SoundsHubClient : IDisposable
             HttpStatusCode.Forbidden => "This action is not allowed for your account.",
             HttpStatusCode.TooManyRequests => "Too many requests. Please wait before trying again.",
             HttpStatusCode.NotFound when response.RequestMessage?.RequestUri?.AbsolutePath.Contains("/admin/") == true || response.RequestMessage?.RequestUri?.AbsolutePath.EndsWith("/issues") == true => "Owner tools and reports need the updated Hub service deployed first.",
+            HttpStatusCode.NotFound when response.RequestMessage?.RequestUri?.AbsolutePath.EndsWith("/profile") == true => "Country flags need the updated Hub service deployed first.",
             HttpStatusCode.NotFound => "This sound is no longer available.",
             HttpStatusCode.Gone => "This recovery attempt has ended. Start password recovery again.",
             HttpStatusCode.RequestEntityTooLarge => "Choose audio smaller than 10 MB and shorter than 60 seconds.",
@@ -331,6 +344,26 @@ public sealed class SoundsHubClient : IDisposable
     {
         try { if (Session != null) { using var request = Request(HttpMethod.Post, "/auth/v1/logout?scope=local", true); using var response = await http.SendAsync(request, ct); } }
         finally { SaveSession(null); }
+    }
+    public async Task<HubCountryPreference> CountryPreference(CancellationToken ct)
+    {
+        await Refresh(ct);
+        try {
+            using var result = await Send(Request(HttpMethod.Get, "/functions/v1/sounds-hub/profile", true), ct);
+            var value = result.RootElement.Deserialize<HubCountryPreference>(Json) ?? new(null, false); value.Validate(); return value;
+        }
+        catch (HttpRequestException error) when (error.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Older Hub deployments do not have the private profile endpoint yet. Let the
+            // user open the picker, but keep display disabled until the server can save it.
+            return new(HubCountries.Default.Code, false);
+        }
+    }
+    public async Task SetCountryPreference(string countryCode, bool showCountry, CancellationToken ct)
+    {
+        countryCode = countryCode.Trim().ToUpperInvariant(); var value = new HubCountryPreference(countryCode, showCountry); value.Validate();
+        await Refresh(ct); var request = Request(HttpMethod.Put, "/functions/v1/sounds-hub/profile", true); request.Content = JsonContent.Create(new { countryCode, showCountry });
+        using var result = await Send(request, ct);
     }
     public async Task<HubPage> Browse(string search, int page, bool mine, CancellationToken ct)
     {

@@ -158,3 +158,13 @@ After `setup-account-flow.sql`, apply `setup-owner-reports.sql`, then `setup-sub
 For an existing deployment with Owner tools already working, apply only `setup-submission-limits.sql`
 and redeploy the regenerated function. These limits distinguish suggestions (5/24h) from problem/sound
 reports (6/12h combined), serialize concurrent submissions by account, and preserve the Owner exemption.
+
+## Country flag preference
+
+Apply `setup-country-flags.sql` once and redeploy the regenerated Edge Function.
+The native Hub then shows **Flag Selector** only to signed-in users. The user
+chooses from the bundled 255-country/region catalogue and explicitly enables or
+disables public display. Saving updates all existing uploads atomically; future
+uploads inherit the saved preference. The private profile table is inaccessible
+to anonymous and authenticated REST clients, and public sound rows contain only
+the selected country code while display is enabled.

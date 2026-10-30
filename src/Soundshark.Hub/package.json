@@ -2,6 +2,6 @@
   "name": "soundshark-hub-checks",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test hub.test.mjs auth-sql.test.mjs owner-sql.test.mjs" },
+  "scripts": { "test": "node --test hub.test.mjs auth-sql.test.mjs owner-sql.test.mjs country-flags-sql.test.mjs" },
   "devDependencies": { "@electric-sql/pglite": "0.5.13" }
 }

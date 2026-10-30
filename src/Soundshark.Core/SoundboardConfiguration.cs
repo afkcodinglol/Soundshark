@@ -65,13 +65,6 @@ public sealed record SoundboardConfiguration
     public double MaximumBoostDb { get; init; } = 24;
     public bool LinkStereoChannels { get; init; } = true;
     public bool NormalizeSpeakerPreview { get; init; }
-    public bool UseActivationSound { get; init; }
-    public string ActivationSoundPath { get; init; } = "";
-    public int StartDelayMs { get; init; }
-    // Positive values delay transmission relative to local clip monitoring.
-    public int RelativeMicrophoneDelayMs { get; init; }
-    public int AutoKeyLeadInMs { get; init; }
-    public int AutoKeyReleaseDelayMs { get; init; }
     public bool HotkeysEnabled { get; init; } = true;
     public bool PassHotkeysToOtherApps { get; init; } = true;
     public bool AllowLeftRightModifiers { get; init; } = true;
@@ -117,11 +110,6 @@ public sealed record SoundboardConfiguration
         Range(TargetLufs, -53, -3, "Target loudness");
         Range(FixedAdjustmentDb, -30, 30, "Fixed volume adjustment");
         Range(MaximumBoostDb, 0, 30, "Maximum volume boost");
-        Range(StartDelayMs, 0, 5000, "Start delay");
-        Range(RelativeMicrophoneDelayMs, -1000, 1000, "Microphone timing offset");
-        Range(AutoKeyLeadInMs, 0, 5000, "Automatic key lead-in");
-        Range(AutoKeyReleaseDelayMs, 0, 5000, "Automatic key release delay");
-        if (UseActivationSound && string.IsNullOrWhiteSpace(ActivationSoundPath)) throw new ArgumentException("Choose an activation sound or turn that option off.");
         if (Bindings == null || AutoKeys == null || Bindings.Length > 2048 || AutoKeys.Length > 32) throw new ArgumentException("The shortcut configuration is invalid or too large.");
         if (SoundPtt == null || SoundPtt.Count>2048) throw new ArgumentException("The per-sound PTT configuration is invalid.");
         foreach(var item in SoundPtt) {

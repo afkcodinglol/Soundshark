@@ -5,11 +5,26 @@ using Soundshark.Core;
 
 namespace Soundshark;
 
-public sealed record AudioOutputFormat(string Label, string Extension, string Codec)
+public sealed record AudioOutputFormat(string Label, string Extension, string Codec, int MaximumChannels = 0)
 {
     public override string ToString() => Label;
-    public static readonly AudioOutputFormat Mp3 = new("MP3", ".mp3", "mp3");
-    public static readonly AudioOutputFormat[] All = [Mp3, new("WAV", ".wav", "pcm"), new("FLAC", ".flac", "flac"), new("M4A", ".m4a", "aac"), new("OGG", ".ogg", "vorbis"), new("Opus", ".opus", "opus"), new("AIFF", ".aiff", "pcm")];
+    public static readonly AudioOutputFormat Mp3 = new("MP3", ".mp3", "mp3", 2);
+    public static readonly AudioOutputFormat[] All =
+    [
+        Mp3,
+        new("WAV", ".wav", "pcm"),
+        new("FLAC", ".flac", "flac"),
+        new("M4A (AAC)", ".m4a", "aac"),
+        new("AAC", ".aac", "aac"),
+        new("M4A (Apple Lossless)", ".m4a", "alac"),
+        new("OGG Vorbis", ".ogg", "vorbis"),
+        new("Opus", ".opus", "opus", 8),
+        new("WebM (Opus)", ".webm", "opus", 8),
+        new("WMA", ".wma", "wmav2", 2),
+        new("AC-3", ".ac3", "ac3", 6),
+        new("WavPack", ".wv", "wavpack"),
+        new("AIFF", ".aiff", "pcm")
+    ];
 }
 
 /// <summary>Direct source-to-format conversion. Compatible audio is remuxed without re-encoding.</summary>
@@ -49,15 +64,19 @@ public static class AudioConversion
         bool copy = level.Reduction == 0 && (format.Codec == codec
             || format.Extension == ".wav" && (codec is "pcm_s16le" or "pcm_s24le" or "pcm_s32le" or "pcm_f32le" or "pcm_f64le")
             || format.Extension == ".aiff" && (codec is "pcm_s16be" or "pcm_s24be" or "pcm_s32be"));
-        var encoding = copy ? new[] { "-c:a", "copy" } : format.Extension switch
+        var encoding = copy ? new[] { "-c:a", "copy" } : format switch
         {
-            ".mp3" => ["-c:a", "libmp3lame", "-q:a", "2"],
-            ".wav" => ["-c:a", bits > 24 ? "pcm_s32le" : bits > 16 ? "pcm_s24le" : "pcm_s16le"],
-            ".flac" => ["-c:a", "flac", "-compression_level", "5"],
-            ".m4a" => ["-c:a", "aac", "-b:a", "192k"],
-            ".ogg" => ["-c:a", "libvorbis", "-q:a", "5"],
-            ".opus" => ["-c:a", "libopus", "-b:a", "128k", "-vbr", "on"],
-            ".aiff" => ["-c:a", bits > 24 ? "pcm_s32be" : bits > 16 ? "pcm_s24be" : "pcm_s16be"],
+            { Codec: "mp3" } => ["-c:a", "libmp3lame", "-q:a", "2"],
+            { Extension: ".wav" } => ["-c:a", bits > 24 ? "pcm_s32le" : bits > 16 ? "pcm_s24le" : "pcm_s16le"],
+            { Codec: "flac" } => ["-c:a", "flac", "-compression_level", "5"],
+            { Codec: "aac" } => ["-c:a", "aac", "-b:a", "192k"],
+            { Codec: "alac" } => ["-c:a", "alac"],
+            { Codec: "vorbis" } => ["-c:a", "libvorbis", "-q:a", "5"],
+            { Codec: "opus" } => ["-c:a", "libopus", "-b:a", "128k", "-vbr", "on"],
+            { Codec: "wmav2" } => ["-c:a", "wmav2", "-b:a", "192k"],
+            { Codec: "ac3" } => ["-c:a", "ac3", "-b:a", "192k"],
+            { Codec: "wavpack" } => ["-c:a", "wavpack"],
+            { Extension: ".aiff" } => ["-c:a", bits > 24 ? "pcm_s32be" : bits > 16 ? "pcm_s24be" : "pcm_s16be"],
             _ => throw new ArgumentException("Unsupported output format.")
         };
         string temp = Path.Combine(Path.GetDirectoryName(destination)!, ".soundshark-" + Guid.NewGuid() + format.Extension);
@@ -65,7 +84,7 @@ public static class AudioConversion
         {
             var args = new List<string> { "-nostdin", "-v", "error", "-progress", "pipe:1", "-i", input, "-map", "0:a:0", "-map_metadata", "-1", "-vn" };
             args.AddRange(encoding);
-            if (!copy && format == AudioOutputFormat.Mp3 && channels > 2) args.AddRange(["-ac", "2"]);
+            if (!copy && format.MaximumChannels > 0 && channels > format.MaximumChannels) args.AddRange(["-ac", format.MaximumChannels.ToString(CultureInfo.InvariantCulture)]);
             if (format == AudioOutputFormat.Mp3) args.AddRange(["-id3v2_version", "0", "-write_id3v1", "0"]);
             args.Add(temp);
             if (copy) {

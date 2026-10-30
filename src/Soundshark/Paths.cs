@@ -21,6 +21,7 @@ public sealed class Settings
     public Dictionary<string,long> LibraryPlayCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool GroupLibraryByColor { get; set; }
     public bool LibraryListView { get; set; }
+    public bool HubGridView { get; set; }
     public bool LibraryManualOrder { get; set; }
     public List<string> LibraryOrder { get; set; } = [];
     public bool ClipperEnabled { get; set; }

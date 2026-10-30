@@ -17,3 +17,4 @@ Write-Output "Dashboard files prepared in $destination"
 Copy-Item -LiteralPath (Join-Path $taskRoot 'src/Soundshark.Hub/supabase/setup-owner-reports.sql') -Destination (Join-Path $destination 'OwnerReportsSetup.sql') -Force
 
 Copy-Item -LiteralPath (Join-Path $taskRoot 'src/Soundshark.Hub/supabase/setup-submission-limits.sql') -Destination (Join-Path $destination 'SubmissionLimits.sql') -Force
+Copy-Item -LiteralPath (Join-Path $taskRoot 'src/Soundshark.Hub/supabase/setup-country-flags.sql') -Destination (Join-Path $destination 'CountryFlagsSetup.sql') -Force

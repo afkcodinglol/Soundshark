@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using Soundshark;
 
 internal static partial class Program
@@ -27,11 +28,16 @@ internal static partial class Program
         string input=Path.Combine(Paths.Cache,"hub-fixture.mp3");
         await MediaTools.Run(Paths.Tool("ffmpeg"),["-nostdin","-v","error","-f","lavfi","-i","sine=frequency=440:duration=1","-ar","48000","-ac","2","-c:a","libmp3lame","-b:a","192k","-id3v2_version","0","-write_id3v1","0",input],CancellationToken.None);
         byte[] audio=await File.ReadAllBytesAsync(input); var info=await MediaTools.Probe(input,CancellationToken.None);
-        var owner=Guid.NewGuid(); var sound=new HubSound(Guid.NewGuid(),"Community test sound","Test uploader",info.Duration,audio.Length,Convert.ToHexString(SHA256.HashData(audio)),owner);
-        bool corrupt=false; int refreshes=0; bool rejectLogout=false;
+        var owner=Guid.NewGuid(); var sound=new HubSound(Guid.NewGuid(),"Community test sound","Test uploader",info.Duration,audio.Length,Convert.ToHexString(SHA256.HashData(audio)),owner,CountryCode:"CA");
+        bool corrupt=false; int refreshes=0; bool rejectLogout=false, profileAvailable=true; var preference=new HubCountryPreference("CA",true);
         var handler=new HubHandler(async (request,ct)=>{
             string path=request.RequestUri!.AbsolutePath;
             if(path.EndsWith("/account")) return new HttpResponseMessage(HttpStatusCode.OK){Content=JsonContent.Create(new { isOwner=false })};
+            if(path.EndsWith("/profile")) {
+                if(!profileAvailable) return new HttpResponseMessage(HttpStatusCode.NotFound){Content=JsonContent.Create(new{message="Not found"})};
+                if(request.Method==HttpMethod.Put) { var value=(await request.Content!.ReadFromJsonAsync<HubCountryPreference>(cancellationToken:ct))!;preference=value; }
+                return new HttpResponseMessage(HttpStatusCode.OK){Content=JsonContent.Create(preference)};
+            }
             if(path=="/auth/v1/signup") return new HttpResponseMessage(HttpStatusCode.OK){Content=JsonContent.Create(new{user=new{id=owner}})};
             if(path=="/auth/v1/token"||path=="/auth/v1/verify") {
                 bool refresh=request.RequestUri.Query.Contains("refresh_token"); if(refresh)refreshes++;
@@ -62,6 +68,16 @@ internal static partial class Program
             Check(!await client.SignUp("u@example.test",validPassword,"TestUploader",CancellationToken.None),"signup accepts both password boundaries and handles required email verification");
         await client.SignIn("u@example.test","a-long-test-password",CancellationToken.None);
         Check(client.Session?.UserId==owner&&File.Exists(sessionFile)&&!Encoding.UTF8.GetString(await File.ReadAllBytesAsync(sessionFile)).Contains("private-refresh-token"),"remembered session is encrypted for the Windows user and never stores the password");
+        Check(HubCountries.All.Count==255&&HubCountries.All.Select(c=>c.Code).Distinct(StringComparer.OrdinalIgnoreCase).Count()==255&&HubCountries.All.All(c=>c.Flag is System.Windows.Media.Imaging.BitmapImage image&&image.PixelWidth>0&&image.PixelHeight>0),"all 255 bundled country and region flags load as real local images");
+        Check((await client.CountryPreference(CancellationToken.None))==new HubCountryPreference("CA",true),"signed-in account loads its private country flag preference");
+        await client.SetCountryPreference("gb-sct",false,CancellationToken.None);
+        Check(preference==new HubCountryPreference("GB-SCT",false)&&handler.Requests.Last().Token=="access-token","country flag display preference saves with authentication and normalized code");
+        profileAvailable=false;
+        var legacyPreference=await client.CountryPreference(CancellationToken.None);
+        Check(!legacyPreference.ShowCountry&&HubCountries.Supports(legacyPreference.CountryCode),"country flag picker still opens against an older Hub service");
+        try { await client.SetCountryPreference("CA",true,CancellationToken.None); throw new Exception("Legacy Hub accepted country preference"); }
+        catch(HttpRequestException error) when(error.StatusCode==HttpStatusCode.NotFound) { Check(error.Message.Contains("updated Hub service"),"older Hub gives a country-specific deployment message instead of a missing-sound error"); }
+        profileAvailable=true;
         await Task.WhenAll(client.Browse("",0,true,CancellationToken.None),client.Browse("",0,true,CancellationToken.None));
         Check(refreshes==1,"concurrent signed-in requests refresh an expired session only once");
         foreach (var validPassword in new[] { "123456", "123456789012" }) {
@@ -102,7 +118,18 @@ internal static partial class Program
         await uiClient.SignIn("u@example.test","123456",CancellationToken.None);
         var hub=new SoundsHubWindow(window,uiClient){ShowActivated=false};hub.Show();await Task.Delay(100);hub.UpdateLayout();
         Check(Descendants<ListBox>(hub).Single().Items.Count==1&&Descendants<Button>(hub).Single(b=>b.Content is string s&&s=="Upload Sound").IsEnabled,"authenticated Hub renders catalogue and enables upload");
+        Check(Descendants<Button>(hub).Single(b=>Equals(b.Content,"Flag Selector")).IsVisible&&Descendants<Image>(hub).Any(image=>image.IsVisible&&image.Source!=null)&&!Descendants<TextBlock>(hub).Any(text=>text.Text.Contains("👑")),"signed-in Hub shows Flag Selector and the country flag beside the name without an owner crown");
+        var hubList=Descendants<ListBox>(hub).Single();var hubView=Descendants<ToggleButton>(hub).Single(t=>t.Name=="HubViewSwitch");
+        Check(hubView.IsChecked!=true&&Descendants<VirtualizingStackPanel>(hubList).Any(),"Sounds Hub opens in List view with a clear segmented selector");
+        await hub.SetHubGridView(true);hub.UpdateLayout();
+        Check(hubView.IsChecked==true&&Descendants<SoundTilePanel>(hubList).Any()&&Settings.Load().HubGridView,"Grid view uses responsive virtualized cards and saves the preference");
+        Snapshot(hub,"sounds-hub-grid.png");
+        await hub.SetHubGridView(false);hub.UpdateLayout();
+        Check(Descendants<VirtualizingStackPanel>(hubList).Any()&&!Settings.Load().HubGridView,"List view restores full-width virtualized rows and saves the preference");
         Snapshot(hub,"sounds-hub-native.png");
+        var flagWindow=new HubCountryWindow(hub,new("CA",true)){ShowActivated=false};flagWindow.Show();flagWindow.UpdateLayout();
+        Check(Descendants<ComboBox>(flagWindow).Single(c=>c.Name=="HubCountry").Items.Count==255&&Descendants<CheckBox>(flagWindow).Single(c=>c.Name=="HubShowCountry").IsChecked==true,"country flag chooser offers every bundled flag and preserves the display choice");
+        Snapshot(flagWindow,"sounds-hub-country-flags.png");flagWindow.Close();
         var account=new HubAccountWindow(hub,client){ShowActivated=false};account.Show();account.UpdateLayout();
         Check(Descendants<PasswordBox>(account).Count()==1&&Descendants<TextBox>(account).Any(t=>t.Name=="HubIdentifier")&&Descendants<CheckBox>(account).Any(t=>t.Name=="HubRememberMe"&&t.IsChecked!=true),"login offers username or email, password, and an optional 30-day remember toggle");
         Snapshot(account,"sounds-hub-account.png");account.Close();hub.Close();window.Close();

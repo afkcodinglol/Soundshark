@@ -830,8 +830,8 @@ internal static partial class Program
         Check(outputSlider.Name == "SoundOutputVolume" && outputSlider.Minimum == 0 && outputSlider.Maximum == 100, "Audio settings exposes one sound output slider bounded to 0–100 percent");
         Check(settingsWindow.Background is SolidColorBrush background && background.Color == (Color)ColorConverter.ConvertFromString("#151419"), "Library Settings inherits the dark application theme");
         var settingsTabs = Descendants<System.Windows.Controls.TabControl>(settingsWindow).Single();
-        Check(settingsTabs.Items.Cast<System.Windows.Controls.TabItem>().Select(t=>t.Header.ToString()).SequenceEqual(new[]{"Audio","Hotkeys","Advanced"}), "Soundboard Settings contains Audio, playback Hotkeys and Advanced only");
-        foreach (int index in Enumerable.Range(0, 3)) { settingsTabs.SelectedIndex = index; await Task.Delay(80); Snapshot(settingsWindow, $"library-settings-{index}.png"); }
+        Check(settingsTabs.Items.Cast<System.Windows.Controls.TabItem>().Select(t=>t.Header.ToString()).SequenceEqual(new[]{"General","Hotkeys"}), "Soundboard Settings contains General and Hotkeys only");
+        foreach (int index in Enumerable.Range(0, 2)) { settingsTabs.SelectedIndex = index; await Task.Delay(80); Snapshot(settingsWindow, $"library-settings-{index}.png"); }
         settingsTabs.SelectedIndex = 0; settingsWindow.Width = 780; settingsWindow.Height = 600; await Task.Delay(80); Snapshot(settingsWindow, "library-settings-small.png");
         var saveSettings = Descendants<System.Windows.Controls.Button>(settingsWindow).Single(b => b.Content is string s && s == "Save Settings");
         Check(saveSettings.IsVisible && saveSettings.TransformToAncestor(settingsWindow).Transform(new Point()).Y < settingsWindow.ActualHeight - 40, "Library Settings save remains visible at minimum size");
